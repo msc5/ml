@@ -1,0 +1,10 @@
+**/__pycache__/
+**/lightning_logs/
+**/results/
+**/.neptune/
+**/wandb/
+MUJOCO*
+/datasets/
+/slurm-*
+*.png
+*.DS_Store
