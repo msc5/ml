@@ -3,7 +3,7 @@ from rich.theme import Theme
 
 THEME = Theme({
     'dot.title': 'cyan',
-    'dot.border': 'magenta',
+    'dot.border': 'black',
     'dot.key': 'yellow',
     'dot.type': 'blue',
     'dot.complete': 'green',

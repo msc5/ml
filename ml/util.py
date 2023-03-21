@@ -1,22 +1,33 @@
+from __future__ import annotations
 import contextlib as cl
 import json
 import linecache
 import os
+import socket
+import sys
+import termios
 import threading
 import time
 import tracemalloc
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
+import GPUtil
+import psutil
+from pyfzf.pyfzf import FzfPrompt
 from rich import box
-from rich.table import Table
+from rich.console import Console, group
+from rich.panel import Panel
+from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
+from rich.table import Column
+from rich.text import Text
 import torch
 import torch.nn as nn
 from torchviz import make_dot
 
-from src.ml.cli import console
+from .cli import console
 
-from .io import generate_name
 from .module import Module
+from .renderables import Table
 
 
 def viz(module: Module, tensor: torch.Tensor, path: str = 'viz'):
@@ -37,8 +48,8 @@ def makedir(path: str):
 
 
 def pos_embed(x: torch.Tensor, max_len: int = 1000, seq_dim: int = -2, size_dim: int = -1):
-    """ 
-    Inputs: 
+    """
+    Inputs:
         x: [ *, seq, size ]
     """
 
@@ -85,25 +96,17 @@ class Ranges:
     _max: float
     _mean: Optional[float]
 
-    def __init__(self, x: torch.Tensor):
+    def __init__(self, x: Optional[torch.Tensor] = None):
+        if x is not None:
+            self.update(x)
+
+    def update(self, x: torch.Tensor):
         self._min = x.min().item()
         self._max = x.max().item()
         self._mean = x.mean().item() if x.is_floating_point() else None
 
     def __rich__(self):
         return f'([green]{self._min:.2f}[reset], [yellow]{self._mean:.2f}[reset], [red]{self._max:.2f}[reset])'
-
-
-# def get_parameters(modules: Iterable[nn.Module]):
-#     """
-#     Given a list of torch modules, returns a list of their parameters.
-#     :param modules: iterable of modules
-#     :returns: a list of parameters
-#     """
-#     model_parameters = []
-#     for module in modules:
-#         model_parameters += list(module.parameters())
-#     return model_parameters
 
 
 class FreezeParameters:
@@ -157,11 +160,13 @@ class Metadata:
 class Timer:
 
     def __init__(self):
-        self._start = self._mark = time.perf_counter()
+        # self._start = self._mark = time.perf_counter()
+        self._start = self._mark = time.time()
         self._rate = 0.0
 
     def __call__(self, reset: bool = False, step: bool = False):
-        now = time.perf_counter()
+        # now = time.perf_counter()
+        now = time.time()
         total = now - self._start
         diff = now - self._mark
         if reset:
@@ -171,43 +176,23 @@ class Timer:
             self._rate = 1 / (diff / 60**2)
         return total, diff
 
+    @group()
+    def _render_rate(self):
+        if self._rate != 0.0:
+            yield f'[cyan]{self._rate:,.2f}[reset] steps/hour'
+
     def __rich__(self):
         total, _ = self()
         mins = total / 60
         if mins < 60:
-            msg = f'[blue]{mins:.2f}[reset] mins'
+            msg = f'[blue]{mins:,.2f}[reset] mins'
         else:
             hrs = mins // 60
             mins = mins - 60 * hrs
-            msg = f'[blue]{hrs:.2f}[reset] hrs [blue]{mins:.2f}[reset] mins'
+            msg = f'[blue]{hrs:,.2f}[reset] hrs [blue]{mins:,.2f}[reset] mins'
         if self._rate != 0.0:
-            msg += f' ([cyan]{self._rate:.2f}[reset] steps/hour)'
+            msg += f' ([cyan]{self._rate:,.2f}[reset] steps/hour)'
         return msg
-
-
-class Thread (threading.Thread):
-
-    daemon: bool = True
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        from .trainer import CurrentTrainer
-        if CurrentTrainer is not None:
-            self.threads = CurrentTrainer.threads
-            self.name = generate_name()
-            self.threads[self.name] = self
-
-    def run(self) -> None:
-        result = super().run()
-        del self.threads[self.name]
-        return result
-
-    def __rich__(self):
-        if self.is_alive():
-            return '[green]⬤  alive'
-        else:
-            return '[red] stopped'
 
 
 def thread(function: Callable):
@@ -249,3 +234,320 @@ def display_top(snapshot, key_type='lineno', limit=5):
         console.log(f'{len(other)} other: [red]{size / 1024:.1f}[reset] KiB')
     total = sum(stat.size for stat in stats)
     console.log(f'Total allocated size: [red]{total / 1024:.1f}[reset] KiB')
+
+
+class TextBuffer:
+
+    buffer: list[str]
+
+    def __init__(self, prompt: str = ''):
+        self.prompt = prompt
+        self.buffer = []
+
+    def delete(self):
+        self.buffer.pop(-1)
+
+    def append(self, msg: str):
+        self.buffer.append(msg)
+
+    def copy(self, buffer: TextBuffer):
+        self.buffer = [char for char in buffer.buffer]
+
+    def msg(self):
+        return ''.join(self.buffer)
+
+    def __rich__(self):
+        return Text(self.prompt) + Text(self.msg())
+
+
+class Keyboard:
+
+    callbacks: dict
+
+    def __init__(self) -> None:
+        self.callbacks = {}
+
+    def __enter__(self):
+        self.thread = threading.Thread(target=self.poll, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_):
+        pass
+
+    def readchar(self):
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        new_settings = termios.tcgetattr(fd)
+        new_settings[3] = new_settings[3] & ~termios.ECHO & ~termios.ICANON
+        termios.tcsetattr(fd, termios.TCSANOW, new_settings)
+        try:
+            char = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSAFLUSH, old_settings)
+        return char
+
+    def poll(self):
+        try:
+            while True:
+                char = self.readchar()
+                callback = self.callbacks.get(char, None)
+                if callback is not None:
+                    callback()
+                # else:
+                #     console.log(char)
+                #     console.log(ord(char))
+        except:
+            console.print_exception()
+
+
+class Pager:
+
+    def __init__(self, renderable: Any) -> None:
+        self.renderable = renderable
+        from .cli.console import THEME
+        self.console = Console(theme=THEME)
+
+    def start(self):
+        with self.console.pager():
+            # for line in self.renderable:
+            #     self.console.print(line)
+            self.console.print(self.renderable)
+
+    def stop(self):
+        pass
+
+
+class Fuzzy:
+
+    def __init__(self, console, iterable: Any) -> None:
+        self.console = console
+        self.iterable = iterable
+        self.prompt = FzfPrompt()
+
+    def start(self):
+        with self.console.screen():
+            self.prompt.prompt(self.iterable)
+
+    def stop(self):
+        pass
+
+
+class Screens:
+
+    screens: dict
+    active: Optional[str] = None
+
+    def __init__(self, screens: dict) -> None:
+        self.screens = screens
+
+    def select(self, key: str):
+        if key in self.screens:
+            if self.active is None:
+                self.active = key
+                if hasattr(self.screens[key], 'start'):
+                    self.screens[key].start()
+                elif hasattr(self.screens, '__enter__'):
+                    self.screens[key].__enter__()
+                else:
+                    raise Exception('Screen has no start or __enter__ function')
+            elif key != self.active:
+                if hasattr(self.screens[key], 'stop'):
+                    self.screens[key].stop()
+                elif hasattr(self.screens, '__exit__'):
+                    self.screens[key].__exit__()
+                else:
+                    raise Exception('Screen has no stop or __exit__ function')
+                self.active = key
+                self.screens[key].start()
+
+    def clear(self):
+        if self.active is not None and self.active in self.screens:
+            self.screens[self.active].stop()
+        self.active = None
+
+
+class Terminal:
+
+    inputs: TextBuffer
+    message: TextBuffer
+
+    def __init__(self) -> None:
+        self.inputs = TextBuffer('-> ')
+        self.message = TextBuffer()
+
+    def __enter__(self):
+        self.thread = threading.Thread(target=self.poll, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_):
+        pass
+
+    def readchar(self):
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        new_settings = termios.tcgetattr(fd)
+        new_settings[3] = new_settings[3] & ~termios.ECHO & ~termios.ICANON
+        termios.tcsetattr(fd, termios.TCSANOW, new_settings)
+        try:
+            char = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSAFLUSH, old_settings)
+        return char
+
+    def poll(self):
+        try:
+            while True:
+                char = self.readchar()
+                if char == Key.enter or char == '\n':
+                    self.command()
+                elif char == Key.backspace or char == '\x7f':
+                    self.backspace()
+                else:
+                    self.inputs.append(char)
+        except:
+            console.print_exception()
+
+    def command(self):
+        self.message.copy(self.inputs)
+        self.inputs = TextBuffer('-> ')
+
+        # command = self.message.msg()
+        # if command == 'exit':
+        #     self.trainer.exit()
+
+    def backspace(self):
+        self.inputs.delete()
+
+    @group()
+    def __rich__(self):
+        yield self.message
+        yield self.inputs
+
+
+def cluster():
+    hostname = socket.gethostname()
+    return 'cs' in hostname
+
+
+class Steps:
+
+    keys: list[str]
+    steps: dict[str, int]
+    last: dict[str, int]
+    timers: dict[str, Timer]
+
+    def __init__(self, *args: str) -> None:
+        self.keys = list(args)
+        self.steps = {key: 0 for key in args}
+        self.last = {key: 0 for key in args}
+        self.timers = {key: Timer() for key in args}
+
+    def add(self, key: str):
+        if not key in self.keys:
+            self.keys.append(key)
+            self.steps[key] = 0
+            self.last[key] = 0
+            self.timers[key] = Timer()
+
+    def get(self, key: str):
+        if key in self.keys:
+            return self.steps[key]
+        return 0
+
+    def step(self, key: str):
+        if key in self.keys:
+            self.steps[key] += 1
+            self.timers[key](step=True)
+
+    def modulo(self, key: str, mod: int, gt: int = -1, dest: Optional[str] = None):
+        if key in self.keys:
+            step = self.steps[key]
+            if step % mod == 0 and step > gt:
+                if dest is not None and dest in self.keys:
+                    self.steps[dest] += 1
+                    self.last[dest] = self.steps[key]
+                    self.timers[dest](step=True)
+                else:
+                    self.last[key] = self.steps[key]
+                return True
+        return False
+
+    def __rich__(self):
+        table = Table(Column('Key', ratio=1),
+                      Column('Steps', ratio=1),
+                      Column('Last', ratio=1),
+                      Column('Rate', ratio=3),
+                      show_header=True, box=box.ROUNDED, style='black')
+        for key in self.keys:
+            name = Text(key, style='blue')
+            steps = f'[yellow]{self.steps[key]:,}'
+            last = f'[magenta]{self.last[key]:,}'
+            table.add_row(name, steps, last, self.timers[key]._render_rate())
+        return table
+
+
+class System:
+
+    stats: dict[str, dict[str, float]]
+    progress: dict[str, Progress]
+
+    def __init__(self) -> None:
+        self.stats = {'CPU': {}, 'Memory': {}}
+        self.progress = {}
+        self._update()
+        self._update_progress()
+
+    def _update(self):
+
+        gpus = GPUtil.getGPUs()
+        if len(gpus) > 0:
+            gpu = gpus[0]
+            self.stats['GPU'] = {}
+            self.stats['GPU']['Memory'] = gpu.memoryUsed / gpu.memoryTotal
+            self.stats['GPU']['Load'] = gpu.load
+            memory_used = torch.cuda.memory_allocated(0)
+            memory_total = torch.cuda.get_device_properties(0).total_memory
+            self.stats['GPU']['Torch'] = memory_used / memory_total
+
+        self.stats['CPU']['Usage'] = psutil.cpu_percent() / 100
+
+        self.stats['Memory']['Usage'] = psutil.virtual_memory().percent / 100
+
+    def _update_progress(self):
+
+        for device, stats in self.stats.items():
+
+            # Initialize
+            if not device in self.progress:
+                columns = [TextColumn('{task.description:10}', style='yellow'),
+                           BarColumn(complete_style='yellow', finished_style='yellow'),
+                           TaskProgressColumn()]
+                self.progress[device] = Progress(*columns)
+
+            ids = {task.description: task.id for task in self.progress[device].tasks}
+            for key, stat in stats.items():
+
+                completed = int(stat * 100)
+
+                # Initialize
+                if not key in ids:
+                    self.progress[device].add_task(key, total=100, completed=completed)
+                else:
+                    self.progress[device].update(ids[key], completed=completed)
+
+    @group()
+    def __rich__(self):
+
+        self._update()
+        self._update_progress()
+
+        table = Table(Column('Device', vertical='middle'), 'Stat', box=box.ROUNDED, style='black')
+
+        for device, progress in self.progress.items():
+            label = Text(device, style='bold magenta')
+            panel = Panel(progress, border_style='black')
+            table.add_row(label, panel)
+
+        yield table

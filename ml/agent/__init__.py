@@ -1,3 +1,3 @@
-from .agent import Agent, Actor, State, Transition
+from .agent import Agent, Actor
 from .buffer import ReplayBuffer
 from .wrappers import Wrapper

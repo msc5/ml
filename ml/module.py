@@ -1,103 +1,145 @@
-from typing import Literal, Optional, cast
-from rich.console import group
+from __future__ import annotations
+from typing import Optional
+
+from rich import box
+from rich.columns import Columns
+from rich.columns import Columns
+from rich.console import Group, group
+from rich.padding import Padding
+from rich.panel import Panel
+from rich.text import Text
 import torch
 import torch.nn as nn
 
+from .cli import console
 from .options import Dot, Options, OptionsModule
-
-from .dist import Distribution
-
-
-class Param:
-
-    count: int = 0
-    grad: Optional[torch.Tensor] = None
-
-    @group()
-    def __rich__(self):
-        msg = f'[magenta]({self.count:,})[reset]'
-        if self.grad is not None:
-            norm, zero = self.grad.norm(), self.grad.abs().sum() == 0
-            if not zero:
-                msg += ' <- ' + f'[green]𝝯 {norm.item():5.2e}'
-        yield msg
+from .renderables import Table
 
 
-def get_device():
-    device = 'cpu'
-    if torch.cuda.is_available():
-        device = 'cuda'
-    # if torch.backends.mps.is_available():
-    #     device = 'mps'
-    return device
+def get_device(dev: Optional[str] = None):
+    """
+    When initializing modules, prefer cuda if it is available.
+    """
+    if dev is None:
+        if torch.cuda.is_available():
+            return torch.device('cuda')
+        else:
+            return torch.device('cpu')
+    else:
+        return torch.device(dev)
 
 
 class Module (OptionsModule, nn.Module):
+    """
+    A Module extends the option-inheritance function of the OptionsModule, but
+    has added functionality for use with the PyTorch Library.
+    """
 
     _hide_grads: bool = False
+    _selected: bool = False
 
-    device: Literal['cpu', 'cuda', 'mps'] = get_device()
-    samples: torch.Tensor
+    _param_count: int = 0
+    _grad_norm: Optional[float] = None
+
+    device: torch.device = get_device()
 
     def __init__(self, opts: Optional[Options] = None):
         super(Module, self).__init__(opts)
 
         self.metrics = Dot()
-        self.params = Param()
-
-        super().register_full_backward_hook(self._get_grads)
-
-    def _params(self, freeze: list[str] = []):
-        params = {}
-        for name, child in self.named_children():
-            if not any([frozen in name for frozen in freeze]):
-                if isinstance(child, Module) and not child._hide_grads:
-                    # params[f'{name} [blue]({child.params.count:,})[reset]'] = child.params
-                    p = child._params(freeze)
-                    if len(p) != 0:
-                        params[f'{name} [blue]({child.params.count:,})[reset]'] = p
-                    else:
-                        params[name] = child.params
-        return Dot(params)
-
-    def _get_grads(self, _: nn.Module, in_grad, out_grad):
-        in_grad = in_grad[0] if isinstance(in_grad, tuple) else None
-        out_grad = out_grad[0] if isinstance(out_grad, tuple) else None
-        if out_grad is not None:
-            self.params.grad = out_grad.detach()
 
     def _build(self):
         built = super()._build()
 
-        count = 0
-        for p in self.parameters():
-            count += torch.tensor(p.shape).prod().item()
-        self.params.count = cast(int, count)
+        # Check if module is common (Contains no children Modules)
+        self._is_common = sum([isinstance(c, Module) for c in self.children()]) == 0
 
-        # for k, v in self.named_children():
-        #     if isinstance(v, Module):
-        #         if not hasattr(v, '_hide_grads'):
-        #             self.params[k] = v.params
+        # Register gradient hook
+        super().register_full_backward_hook(self._grad_update_hook)
+
+        # Count parameters
+        self._param_count = sum(p.numel() for p in self.parameters() if p.requires_grad)
 
         return built
 
+    def _grad_update_hook(self, module: nn.Module, _, out_grad):
+        if any([p.requires_grad for p in module.parameters()]):
+            # in_grad = in_grad[0] if isinstance(in_grad, tuple) and len(in_grad) > 0 else None
+            out_grad = out_grad[0] if isinstance(out_grad, tuple) and len(out_grad) > 0 else None
+            if out_grad is not None:
+                self._grad_norm = out_grad.detach().norm().item()
+            else:
+                self._grad_norm = None
 
-class ProbabilisticModule (Module):
+    # ---------------------------------------- Public Methods ---------------------------------------- #
 
-    def dist(self, x: torch.Tensor, *args, **kwargs) -> Distribution:
-        return Distribution(x, *args, **kwargs)
+    def polyak(self, learner: Module, p: float = 0.005):
+        """
+        Polyak Averaging
+        Updates own weights with those of learner module with identical architecture.
+        """
 
+        for target_param, learner_param in zip(self.parameters(), learner.parameters()):
+            updated_param = p * learner_param.data + (1.0 - p) * target_param.data
+            target_param.data.copy_(updated_param)
 
-class Optimizers (Dot):
+    # ---------------------------------------- Rendering ---------------------------------------- #
 
-    _freeze: list[str] = []
+    @group()
+    def _render_device(self):
+        msg = Text(self.device.type, style='magenta')
+        if self.device.index is not None:
+            msg += Text(' : ') + Text(str(self.device.index))
+        yield msg
 
-    def zero_grad(self):
-        for key, o in self._items():
-            if key != '_freeze':
-                o.value.zero_grad()
+    @group()
+    def _render_params(self):
+        high, low = 1e-3, 1e-6
+        msg = f'[blue]( {self._param_count:,} )[reset]'
+        if self._grad_norm is not None:
+            if self._grad_norm > high:
+                color = '[green]'
+            elif high > self._grad_norm > low:
+                color = '[yellow]'
+            else:
+                color = '[red]'
+            msg += ' <- ' + color + f'𝝯 {self._grad_norm:5.2e}'
+        yield msg
 
-    def optimize(self, key: str, loss: torch.Tensor, **kwargs):
-        if not key in self._freeze:
-            loss.backward(**kwargs)
-            self[key].step()
+    @group()
+    def _render(self):
+
+        table = Table(box=box.ROUNDED, style='black')
+        uncommons = []
+
+        for name, child in self.named_children():
+            if isinstance(child, Module) and not child._hide_grads:
+                if child._is_common:
+                    heading = Text(name, style='yellow')
+                    table.add_row(heading, child._render_device(), child._render())
+                else:
+                    heading = Columns([Text(name, style='bold cyan'), child._render_params()])
+                    heading = Padding(heading, (0, 1))
+                    panel = Group('', heading, child._render())
+                    uncommons.append(panel)
+
+        has_uncommons = len(uncommons) > 0
+        has_commons = table.row_count > 0
+
+        if has_commons and not has_uncommons:
+            yield table
+        elif not has_commons and has_uncommons:
+            yield Panel(Group(*uncommons), border_style='black')
+        elif has_commons and has_uncommons:
+            yield Panel(Group(table, *uncommons), border_style='black')
+        else:
+            yield self._render_params()
+
+    def __rich__(self):
+        return self._render()
+
+    def __str__(self) -> str:
+        return self.__class__.__name__
+
+    def __repr__(self) -> str:
+        return self.__class__.__name__

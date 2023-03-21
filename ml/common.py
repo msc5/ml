@@ -2,6 +2,7 @@ from typing import Any, Literal, Union
 
 import torch
 import torch.nn as nn
+from torch.nn.parameter import Parameter
 
 from .options import Options
 from .module import Module
@@ -175,6 +176,21 @@ class TransformerBlock (nn.Module):
 #     def forward(self, x):
 #         x = self.block(x)
 #         return x
+
+class Params (Module):
+
+    shape: Union[int, tuple[int]]
+
+    def build(self):
+        self.weight = Parameter(torch.rand(self.shape))
+        # self.__getitem__ = self.weight.__getitem__
+
+    def __getitem__(self, *args, **kwargs):
+        return self.weight.__getitem__(*args, **kwargs)
+
+    def forward(self):
+        return self.weight
+
 
 class Transformer (Module):
 

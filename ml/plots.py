@@ -3,9 +3,9 @@ import torch
 import matplotlib.pyplot as plt
 import matplotlib.animation as anim
 import os
-from src.ml.cli import console
 
-from src.ml.util import quiet
+from .cli import console
+from .util import quiet
 
 
 def figure(*args, **kwargs) -> tuple[plt.Figure, plt.Axes]:
@@ -30,12 +30,15 @@ def gif_diff_values(values: torch.Tensor, tag: str = 'values'):
 
     ani = anim.FuncAnimation(fig, update, frames=torch.arange(len(values)), blit=True, interval=5)
 
-    writer = anim.FFMpegWriter(fps=20)
+    writer = anim.FFMpegWriter(fps=30)
     dir = os.path.dirname(tag)
     if not os.path.exists(dir):
         os.makedirs(dir)
-    ani.save(f'{tag}.mp4', writer=writer)
+    path = f'{tag}.mp4'
+    ani.save(path, writer=writer)
     plt.close(fig)
+
+    return path
 
 
 def scores_plot(runs: dict, tag: str = 'scores'):

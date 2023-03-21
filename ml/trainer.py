@@ -1,58 +1,83 @@
 import abc
-import contextlib
+from functools import partial
 from numbers import Number
 import os
-import queue
-import sys
+import subprocess
+import threading
 import time
-from typing import Literal, Optional
+from typing import Optional
 
-import psutil
-from rich.console import group
+import git
+from humanize import naturalsize
+from rich import box
+from rich.console import group as rgroup
 from rich.layout import Layout
 from rich.live import Live
-from rich.progress import track
+from rich.panel import Panel
 from rich.text import Text
-from rich import box
 import torch
 import wandb
 
-import multiprocessing as mp
-import torch.multiprocessing as tmp
-
-import src.ml as ml
-
-from .agent import Actor, Agent
 from .cli import console
+from .data import OfflineDataset
 from .io import generate_name
-from .util import Thread
+from .module import Module
+from .mp import Manager, Thread
+from .options import Dot, Options
+from .renderables import Alive, Table, check, section
+from .util import Fuzzy, Keyboard, Metadata, Ranges, Screens, Steps, System, Timer
 
 
-class Trainer (ml.Module):
+os.environ["WANDB_CONSOLE"] = "off"
+os.environ['D4RL_SUPPRESS_IMPORT_ERROR'] = '1'
 
-    _name: str
-    _tag: str
 
-    log: bool = False                           # Log results to wandb
-    debug: bool = False                         # Debug with no live display in console
-    save_model: int = 500                       # Save model every n steps. No saving if 0.
-    load_model: Optional[str] = None            # Path to load model from.
-    results_dir: str = 'results'                # Directory to store results
+class Trainer (Module):
+
+    # Configuration options
+    log: bool = False
+    debug: bool = False
+    mode: str = 'train'
+
+    # Loading / Saving
+    # e.g. /results/narldiff/{group}/001-spring-green
+    load_model: str = ''
+    save_model: int = 500
     rollout: int = 500
     max_episodes: Optional[int] = None
-    eval: bool = False
-
-    tag: Optional[str] = None
-    mode: Optional[str] = None
-
+    results_dir: str = 'results'
+    tags: list[str] = []
+    group: str = 'misc'
+    slurm_id: str = ''
+    wandb_id: str = ''
+    wandb_group: str = ''
+    wandb_resume: bool = False
     retrain: list[str] = []
-    freeze: list[str] = []
+    override_opts: bool = False
 
+    # Instance variables
+    metrics: Dot
+    progress: Steps
+    system: System
+    _selected: list = []
+    _threads: dict
+    _loops: list
+    _gpus: list
+
+    # Renderables
     layout: Layout
+    timer: Timer
 
-    def __new__(cls, *_):
-        ml.section('Building Trainer')
-        return super().__new__(cls)
+    # Multiprocessing
+    exit_event: threading.Event
+
+    # Modules
+    model: Module
+    dataset: OfflineDataset
+
+    def _build(self):
+        section('Building')
+        return super()._build()
 
     @abc.abstractmethod
     def train_step(self) -> None:
@@ -74,99 +99,216 @@ class Trainer (ml.Module):
     def optimizers(self, *args, **kwargs) -> dict:
         return {}
 
-    def start(self, project: str):
+    def __init__(self, opts: Optional[Options] = None):
+        super().__init__(opts)
+        global CurrentTrainer
+        CurrentTrainer = self
+        self._init_renderables()
+
+    def _reset(self):
+        self._loops = []
+        self.metrics = Dot()
+        self.timer = Timer()
+        # self.progress = Dot({'session': 0, 'train': 0, 'last': {'save': 0, 'rollout': 0}})
+        self.progress = Steps('session', 'train', 'save', 'rollout')
+        self.system = System()
+        self.main_thread = Thread(main=True)
+        self._logged = Layout()
+        self.agent_table = Layout()
+
+        g = Dot()
+        g.repo = git.Repo(os.getcwd())  # type: ignore
+        g.master = g.repo.head.reference
+        g.branch = str(g.master.name)
+        g.commit = str(g.master.commit.message).replace('\n', ' ').strip()
+        self.github = g
+
+        # Get slurm job name
+        name = os.environ.get('SLURM_JOB_NAME')
+        id = os.environ.get('SLURM_JOB_ID')
+        if name is not None and id is not None:
+            self.slurm_id = f'{name}-{id}'
+
+    def start(self):
         """
         Begins training loop.
         """
 
-        self.loops = []
-        self.queues = ml.Dot({'episode': queue.Queue()})
+        self._reset()
 
-        self.metrics = ml.Dot(time=ml.Timer())
-        self.steps = ml.Dot({'train': 0, 'test': 0})
-        if self.save_model != 0: self.steps.saved = 0
+        section('Starting')
+
+        # Initialize manager for multiprocessing
+        self.manager = Manager()
+        self.manager.start()
+        self.exit_event = self.manager.Event()
+
+        # Load previous model options
+        if self.load_model != '':
+            with Metadata(self.load_model) as meta:
+                config = Options(meta.data['config'])
+                config = config(self.parse())
+                # progress = Dot(meta.data['progress'])
+                # progress.session = 0
+                wandb_id = meta.data.get('wandb', '')
+                sys = self.opts.sys
+            if self.override_opts:
+                self.apply_opts(config)
+                self.opts.sys = sys
+            self.wandb_id = wandb_id
+            # self.progress = progress
+            check('Loaded Model Configuration')
 
         # Metadata
-        with ml.Metadata(self.results_dir) as meta:
+        with Metadata(self.results_dir) as meta:
             meta.data['number'] = number = meta.data.get('number', 0) + 1
-        self.name = f'{number:03d}-{self.tag or generate_name()}'
-
-        self.dir = os.path.join(self.results_dir, self._tag, self.name)
-        with ml.Metadata(self.dir) as meta:
-            meta.data['opts'] = self.opts._dict()
-
-        self.threads = {}
-        self.processes = ml.Dot()
-
-        global CurrentTrainer
-        CurrentTrainer = self
-
-        # Load previous model
-        if self.load_model is not None:
-            load_path = os.path.join(self.results_dir, self.load_model)
-            with ml.Metadata(load_path) as meta:
-                self.opts.model = ml.Dot(meta.data['opts']['model'])
+        self.name = f'{number:03d}-{self.group if self.group != "misc" else generate_name()}'
+        self.dir = os.path.join(self.results_dir, self.opts.sys.module, self.group, self.name)
+        check(f'Created Directory [cyan]{self.dir}[reset]')
 
         self._build()
         self.to(self.device)
+        check('Built Trainer')
 
-        # Debug
-        self.system = ml.Dot()
-        self.system.cpu = ml.Dot(usage=ml.Progress(tasks=[0]))
-        self.system.memory = ml.Progress(tasks=[0])
-        if self.device == 'cuda':
-            import GPUtil
-            self.gpus = GPUtil.getGPUs()
-            self.system.gpu = ml.Dot(memory=ml.Progress(tasks=list(range(len(self.gpus)))),
-                                     load=ml.Progress(tasks=list(range(len(self.gpus)))))
-        if self.debug:
-            torch.autograd.anomaly_mode.set_detect_anomaly(True)
-
-        # Initialize model optimizers
-        self.optim = ml.Optimizers(self.optimizers())
-        if self.freeze is not None: self.optim._freeze = self.freeze
+        # # Debug
+        # self._system.cpu = Dot(usage=Progress(tasks=[0]))
+        # self._system.memory = Progress(tasks=[0])
+        # if self.device == 'cuda':
+        #     # import GPUtil
+        #     # self._gpus = GPUtil.getGPUs()
+        #     # self._system.gpu = Dot(memory=Progress(tasks=list(range(len(self._gpus)))),
+        #     #                        load=Progress(tasks=list(range(len(self._gpus)))))
+        #     self._system.gpu = Dot(memory=Progress(tasks=['memory']))
+        # if self.debug:
+        #     torch.autograd.anomaly_mode.set_detect_anomaly(True)
+        # check('Initialized System')
 
         # Load previous model
-        if self.load_model is not None:
+        if self.load_model != '':
             self.load(self.load_model)
+            check('Loaded Weights')
 
         # Initialize wandb
         self.run = None
         if self.log:
-            self.run = wandb.init(project=project, name=self.name,
-                                  config={k: v.value for k, v in self.opts})
+            console.print()
+            self.run = wandb.init(project=self.opts.sys.module, name=self.name,
+                                  group=self.wandb_group,
+                                  tags=[*self.tags, self.group],
+                                  # config={k: v.value for k, v in self.opts},
+                                  config={k: v.value for k, v in self._gather_params()},
+                                  id=self.wandb_id if self.wandb_resume else None)
+            console.print()
+            if self.wandb_resume:
+                check(f'Resumed wandb run [cyan]{self.wandb_id}[reset]')
+            else:
+                check('Initialized Wandb')
 
-        ml.section('Options')
-        console.log(self.opts)
+        with Metadata(self.dir) as meta:
+            meta.data['opts'] = self.opts._dict()
+            # meta.data['progress'] = self.progress._dict()
+            meta.data['config'] = self._gather_params()._dict()
+            meta.data['parse'] = self.parse()._dict()
+            if self.log and self.run is not None:
+                meta.data['wandb'] = self.run.id
+        check('Saved Options and Configuration')
 
-    def train(self, project: str):
+        if 'train' in self.opts.mode:
+            ln_source = os.path.join(os.getcwd(), self.dir)
+            ln_dest = os.path.join(self.results_dir, self.opts.sys.module, self.group, 'latest')
+            if os.path.exists(ln_dest):
+                os.unlink(ln_dest)
+            os.symlink(ln_source, ln_dest)
+            check(f'Created symlink at [cyan]{ln_dest}[reset] from [cyan]{ln_source}[reset]')
+
+        check('Finished')
+
+    def train(self):
         """
         Training loop.
         """
 
-        self.start(project)
-        ml.section(f'Training Run [cyan3]{self.name}')
+        self.start()
+        section(f'Training Run [cyan3]{self.name}')
 
-        self.threads = {**self.threads, **{loop.__name__: Thread(target=loop) for loop in self.loops}}
+        config = [f'{k}: {str(v.value)}' for k, v in self._gather_opts()]
+        self._threads = {loop.__name__: Thread(target=loop, daemon=False) for loop in self._loops}
+        screen_args = {'refresh_per_second': 8, 'screen': True, 'console': console}
+        self.screens = Screens({'live': Live(get_renderable=self.dashboard, **screen_args),
+                                'opts': Live(self.opts, **screen_args),
+                                'dataset': Live(self.dataset.table(), **screen_args),
+                                'logged': Live(self._logged, **screen_args),
+                                'config': Fuzzy(console, config),
+                                'agent': Live(self.agent_table, **screen_args)})
 
-        context = (contextlib.nullcontext() if self.debug else
-                   Live(self.dashboard(), console=console, refresh_per_second=8))
+        def block():
+            while all([thread.is_alive() for thread in self._threads.values()]):
+                time.sleep(1.0)
 
         try:
-            [thread.start() for thread in self.threads.values()]
-            with context as self.live:
-                while True: time.sleep(1e5)
+            starters = list(self._threads.values())
+            [thread.start() for thread in starters]
+            if self.debug:
+                block()
+            else:
+                self.screens.select('live')
+                with Keyboard() as keyboard:
+                    keyboard.callbacks['L'] = partial(self.screens.select, 'live')
+                    keyboard.callbacks['O'] = partial(self.screens.select, 'opts')
+                    keyboard.callbacks['D'] = partial(self.screens.select, 'dataset')
+                    keyboard.callbacks['C'] = partial(self.screens.select, 'config')
+                    keyboard.callbacks['W'] = partial(self.screens.select, 'logged')
+                    keyboard.callbacks['A'] = partial(self.screens.select, 'agent')
+                    keyboard.callbacks['\x1b'] = self.screens.clear
+                    block()
 
         except KeyboardInterrupt:
+            self.screens.clear()
+            section('Shutting Down [red](KeyboardInterrupt)[reset]')
+
+        except Exception:
+            self.screens.clear()
+            section('Shutting Down [red](Exception)[reset]')
+            console.print_exception()
+
+        finally:
+            self.screens.clear()
             self.exit()
 
     def exit(self):
-        ml.section('Shutting Down')
-        if self.save_model != 0 and self.steps.train > self.rollout:
-            self.save()
-        if self.log: wandb.finish(quiet=True)
-        # sys.exit()
-        os._exit(1)
+
+        section('Exiting')
+
+        # Save model
+        self.save()
+        check('Saved')
+
+        # Stop threads
+        # with Live(self.main_thread, console=console, transient=True):
+        self.exit_event.set()
+        for thread in self._threads.values():
+            if thread.is_alive():
+                thread.join()
+        check('Threads stopped')
+
+        # Finish Wandb
+        if self.run is not None:
+            console.print()
+            self.run.finish(quiet=True)
+            console.print()
+        check('Finished Wandb')
+
+        # Print information
+        console.print(self.dashboard())
+
+        self.manager.shutdown()
+        check('Finished')
+
+        # except KeyboardInterrupt:
+        #     active = mp.active_children()
+        #     for child in active:
+        #         child.terminate()
+        #     sys.exit(0)
 
     def train_loop(self):
         """
@@ -174,87 +316,118 @@ class Trainer (ml.Module):
         """
 
         while True:
-            self.update_system()
             self.train_step()
-            if self.log:
+            self.train_step_complete()
+            if self.exit_event.is_set():
+                return
 
-                log = {}
-                for key, val in self.metrics:
-                    if not any([frozen in key for frozen in self.freeze]):
-                        if isinstance(val.value, Number):
-                            log[key] = val.value
-                        elif isinstance(val.value, ml.Ranges):
-                            log[f'{key}.min'] = val.value._min
-                            log[f'{key}.max'] = val.value._max
-                            log[f'{key}.mean'] = val.value._mean
-                wandb.log(log, step=self.steps.train)
+    def train_step_complete(self):
+        self.log_metrics()
+        if self.progress.modulo('session', self.save_model, dest='save', gt=self.save_model):
+            self.save()
+        self.progress.step('train')
+        self.progress.step('session')
 
-            if self.save_model != 0 and self.steps.train != 0 and self.steps.train % self.save_model == 0:
-                self.save()
-            self.metrics.time(step=True)
-            self.steps.train += 1
-
-    def update_system(self):
-        self.system.memory.update(0, completed=int(psutil.virtual_memory().percent))
-        self.system.cpu.usage.update(0, completed=int(psutil.cpu_percent()))
-        if self.device == 'cuda':
-            for i, gpu in enumerate(self.gpus):
-                memory_used = int((gpu.memoryUsed / gpu.memoryTotal) * 100)
-                load = int(gpu.load * 100)
-                self.system.gpu.memory.update(i, completed=memory_used)
-                self.system.gpu.load.update(i, completed=load)
+    def log_metrics(self):
+        if self.log:
+            log = {}
+            for model in self._selected:
+                for key, val in model.metrics:
+                    key = f'{model.__class__.__name__}{key}'
+                    if isinstance(val.value, Number):
+                        log[key] = val.value
+                    elif isinstance(val.value, Ranges):
+                        log[f'{key}.min'] = val.value._min
+                        log[f'{key}.max'] = val.value._max
+                        log[f'{key}.mean'] = val.value._mean
+            step = self.progress.get('train') if self.wandb_resume else self.progress.get('session')
+            wandb.log(log, step=step)
+            self._logged.update(Dot(log))
 
     def test_loop(self):
         """
         Tests model on collected actions.
         """
-
+        # section('Starting Test Loop')
         self.test_step()
-        self.exit()
+        # section('Exiting Test Loop')
 
-    def sync(self):
-        self.update_system()
-        if self.log:
-            wandb.log({k: v.value for k, v in self.metrics if isinstance(v.value, Number)})
+    def _init_renderables(self):
 
-    @group()
-    def dashboard(self):
+        empty = Text('None', style='black')
 
-        @group()
+        @rgroup()
         def title():
-            table = ml.Table()
-            name = self.name + ' ([green]Logging ⬤ [reset])' if self.log else self.name
-            table.add_row('Model', self._name)
-            table.add_row('Run', name)
-            if self.load_model is not None:
-                table.add_row('Loaded', self.load_model)
+            table = Table(box=box.ROUNDED, style='black')
+            table.add_row('Module', self.opts.sys.module)
+            table.add_row('Group', Text(self.group, style='cyan'))
+            table.add_row('Run', Text(self.name, style='magenta'))
+            table.add_row('Loaded', Text(self.load_model, style='green') or empty)
             yield table
 
-        @group()
-        def program():
-            yield dot('Threads', ml.Dot(self.threads))
-            yield dot('Processes', self.processes)
+        @rgroup()
+        def info():
+            table = Table(box=None)
 
-        @group()
-        def dot(name: str, dot: ml.Dot):
-            yield Text.from_markup(f'[italic]{name}', justify='center')
+            # Github
+            branch = Text('Branch: ') + Text(self.github.branch, style='magenta')
+            commit = Text('Commit: ') + Text('\"' + self.github.commit + '\"', style='green')
+            table.add_row('Github', branch, commit)
+
+            # Wandb and Slurm
+            wandb_id = Text(self.run.id, style='magenta') if self.run is not None else empty
+            slurm_id = Text(self.slurm_id, style='magenta') if self.slurm_id != '' else empty
+            table.add_row('Wandb', Text('ID: ') + wandb_id, Alive(self.run is not None))
+            table.add_row('Slurm', Text('ID: ') + slurm_id, Alive(self.slurm_id != ''))
+
+            yield Panel(table, border_style='black')
+
+        @rgroup()
+        def system():
+            table = Table(box=box.ROUNDED, style='black')
+            size = ''
+            try:
+                size = int(subprocess.check_output(['du', '-s', self.dir]).split()[0])
+                size = naturalsize(size * 512)
+            except:
+                pass
+            table.add_row('Time', self.timer)
+            table.add_row('Storage', Text(str(size), style='blue'))
+            table.add_row('Mode', Text(self.mode, style='green'))
+            yield table
+
+        @rgroup()
+        def dot(name: str, dot: Dot):
+            yield Text.from_markup(f'[bold italic]{name}', justify='center')
             yield dot
 
-        @group()
+        @rgroup()
         def status():
-            yield program()
-            yield dot(f'Model [magenta]({self.params.count:,})[reset]', self._params(freeze=self.freeze))
+            yield dot(f'Model [magenta]({self._param_count:,})[reset]', self.model._render())
 
-        @group()
+        @rgroup()
         def progress():
-            yield dot('Progress', self.steps)
+            yield dot('Threads', self.main_thread)
+            yield ''
+            yield dot('Progress', self.progress)
+            yield ''
             yield dot('System', self.system)
+
+        self.renderables = Dot(title=title, info=info, system=system,
+                               dot=dot, progress=progress, status=status)
+
+    @rgroup()
+    def dashboard(self):
 
         # Layout
         layout = Layout()
         layout.split_column(
-            Layout(name='title', size=5),
+            Layout(name='title', size=7),
             Layout(name='content'))
+        layout['title'].split_row(
+            Layout(name='run'),
+            Layout(name='info'),
+            Layout(name='system'))
         layout['content'].split_row(
             Layout(name='meta'),
             Layout(name='metrics'),
@@ -263,122 +436,159 @@ class Trainer (ml.Module):
             Layout(name='status'),
             Layout(name='dataset', visible=False))
 
-        layout['title'].update(title())
-        layout['content']['meta']['status'].update(status())
-        layout['content']['metrics'].update(dot('Metrics', self.metrics))
-        layout['content']['progress'].update(progress())
+        layout['title']['run'].update(self.renderables.title())
+        layout['title']['info'].update(self.renderables.info())
+        layout['title']['system'].update(self.renderables.system())
+        layout['content']['meta']['status'].update(self.renderables.status())
+        layout['content']['metrics'].update(self.renderables.dot('Metrics', self.metrics))
+        layout['content']['progress'].update(self.renderables.progress())
         self.layout = layout
 
         yield layout
 
     def save(self):
-        ml.section(f'Saving Model to [magenta]{self.dir}')
+        # if (self.save_model != 0 and self.progress.train >= self.save_model and not self.debug):
 
         # Save progress
-        self.steps.saved = self.steps.train
-        with ml.Metadata(self.dir) as meta:
-            meta.data['steps'] = self.steps._dict()
+        # self.progress.last.save = self.progress.train
+        # with Metadata(self.dir) as meta:
+        #     meta.data['progress'] = self.progress._dict()
 
         # Save weights
         model_path = os.path.join(self.dir, 'model.pt')
         torch.save(self.state_dict(), model_path)
 
     def load(self, run: str):
-        ml.section(f'Loading Model [magenta]{run}')
-        model_path = os.path.join(self.results_dir, run, 'model.pt')
+        section(f'Loading Model [magenta]{run}')
+        model_path = os.path.join(run, 'model.pt')
         state_dict = torch.load(model_path, map_location=self.device)
         for key, val in self.named_parameters():
             if key in state_dict:
                 if any([retrain in key for retrain in self.retrain]):
-                    console.print(f'Retraining: [yellow]{key}[reset]')
+                    check(f'Retraining: [yellow]{key}[reset]', color='magenta')
                     del state_dict[key]
                 elif (state_dict[key].shape != val.shape):
-                    console.print(f'Shape Mismatch: [red]{key}[reset]')
-                    console.print(f'Expected: {val.shape}')
-                    console.print(f'Loaded:   {state_dict[key].shape}')
+                    check(f'Shape Mismatch: [red]{key}[reset]', color='magenta')
+                    console.print(f'     Expected: {val.shape}')
+                    console.print(f'     Loaded:   {state_dict[key].shape}')
                     del state_dict[key]
             else:
-                console.print(f'Missing Parameter: [yellow]{key}[reset]')
+                check(f'Missing Parameter: [yellow]{key}[reset]', color='magenta')
+        to_delete = set()
+        for key, val in state_dict.items():
+            if any([retrain in key for retrain in self.retrain]):
+                check(f'Retraining: [red]{key}[reset]', color='magenta')
+                to_delete.add(key)
+            if 'samples' in key:
+                check(f'Ignoring: [red]{key}[reset]', color='magenta')
+                to_delete.add(key)
+        for key in to_delete:
+            del state_dict[key]
+        check('Finished', color='magenta')
+        console.print('')
+
         self.load_state_dict(state_dict, strict=False)
+
+        # val = torch.load('results/narldiff/580-vtarg2/model.pt', map_location=self.device)
+        # val_dict = {}
+        # for k, v in val.items():
+        #     if 'value' in k:
+        #         val_dict[k] = v
+        #         console.print(f'[green]Loaded {k}')
+        # self.load_state_dict(val_dict, strict=False)
+        # v = 6
+        # val_dir = f'results/narldiff/walk-m{v}'
+        # if not os.path.exists(val_dir):
+        #     os.makedirs(val_dir)
+        # torch.save(self.state_dict(), f'results/narldiff/walk-m{v}/model.pt')
+        # console.print(f'Saved model {val_dir}')
+        # sys.exit(1)
 
 
 class OnlineTrainer (Trainer):
 
-    agent: Agent
-    actor: Actor
-
     seed_episodes: int = 1000
 
-    def start(self, project: str):
-        super().start(project)
-        self.metrics.agent = self.agent.metrics
-        self.steps.agent = self.agent.steps
-        self.processes.agent = self.agent.processes
+    def start(self):
+        super().start()
+        self.agent_rows = ['Episode', 'Environment', 'Score', 'Reward', 'Returns', 'Steps', 'Status']
+        self.agent_table = Table(*self.agent_rows, show_header=True, title='Results')
 
-    def exit(self):
-        self.agent.close()
-        super().exit()
-
-    @group()
+    @rgroup()
     def dashboard(self):
         super().dashboard()
-        if self.eval:
+        if self.mode == 'eval':
 
-            @group()
-            def dot(name: str, dot: ml.Dot):
-                yield Text(name, style='italic', justify='center')
-                yield dot
-
-            @group()
-            def program():
-                yield dot('Threads', ml.Dot(self.threads))
-                yield dot('Processes', self.processes)
-
-            @group()
+            @rgroup()
             def combine():
                 yield self.agent
                 layout = Layout()
                 layout.split_row(Layout(name='progress'), Layout(name='metrics'))
-                layout['progress'].update(program())
-                layout['metrics'].update(dot('Metrics', self.metrics))
+                layout['progress'].update(self.renderables.dot('Threads', self.main_thread))
+                layout['metrics'].update(self.renderables.dot('Metrics', self.metrics))
                 yield layout
 
             self.layout.split_column(self.layout['title'], combine())
 
         yield self.layout
 
-    def actor_loop(self):
-        """
-        Evaluate Actor on environment.
-        """
+    def update_agent_table(self, cache: dict):
 
-        while True:
-            kwargs = self.queues.episode.get()
-            self.agent.episode(actor=self.actor, render=True, **kwargs)
-            self.queues.episode.task_done()
+        def get_last(data):
+            if isinstance(data, list) or isinstance(data, torch.Tensor):
+                if len(data) > 0:
+                    return data[-1]
+                else:
+                    return None
+            else:
+                return data
 
-    def test_step(self) -> None:
-        """
-        Tests the actor on the environment using a batch from an offline
-        dataset or replay buffer. 
-        """
+        def format(data):
+            data = get_last(data)
+            if type(data) == float:
+                return f'{data: 3.3f}'
+            else:
+                return f'{data}'
 
-        self.agent.episode(actor=self.actor, render=True)
+        def add_row(run: dict):
+            if 'step' in run:
+                self.agent_table.add_row(f'{format(run["episode"])}',
+                                         f'{format(run["environment"])}',
+                                         f'{format(run["score"])}',
+                                         f'{format(run["reward"])}',
+                                         f'{format(run["returns"])}',
+                                         f'{format(run["step"])}',
+                                         run['status'],
+                                         style='green' if run['status'] == 'alive' else 'red')
 
-    def fill_buffer(self, episodes: int = 1):
-        """
-        Fill buffer with necessary amount of episodes to begin training. Policy
-        used is random.
-        """
+        def stat(data: dict):
+            mean, std = 0.0, 0.0
+            if data:
+                scores = torch.tensor([e['score'][-1] for e in data.values()
+                                       if (e['score'] is not None and len(e['score']) > 0)])
+                if len(scores) > 0:
+                    mean = scores.mean().item()
+                    std = scores.std().nan_to_num().item()
+                    self.agent_table.add_section()
+                    self.agent_table.add_row(None, None, f'{mean:3.3f} ± {std:3.3f}')
+                    self.agent_table.add_section()
+            return mean, std
 
-        ml.section(f'Collecting {self.seed_episodes} seed episodes')
+        def ordered(data):
+            return sorted(data.items(), key=lambda x: -(x[1].get('score', [0]) or [0])[-1])
 
-        if self.debug:
-            for _ in range(episodes):
-                self.agent.episode(actor=self.actor)
-        else:
-            for _ in track(range(episodes), description='Progress', transient=True):
-                self.agent.episode(actor=self.actor)
+        for _, run in ordered(cache):
+            add_row(run)
+        mean, std = stat(cache)
+
+        return mean, std
 
 
 CurrentTrainer: Optional[Trainer] = None
+
+
+def get_current_trainer():
+    if CurrentTrainer is not None:
+        return CurrentTrainer
+    else:
+        raise Exception('Manager not started!')

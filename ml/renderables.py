@@ -1,28 +1,39 @@
+import torch
+
 from collections.abc import Callable
-from multiprocessing.sharedctypes import SynchronizedBase
-from typing import Optional, Union
+from typing import Any, Optional, Union, Iterable
 
 from rich import box
-from rich.console import group
+from rich.console import Console, ConsoleOptions, RenderResult, RenderableType, group
+from rich.measure import Measurement
 from rich.padding import Padding
 import rich.progress as progress
+from rich.spinner import Spinner
+from rich.styled import Styled
 import rich.table
-import torch.multiprocessing as mp
-import torch.multiprocessing.queue as tmpq
-import multiprocessing.managers as mpman
-
-from src.ml.options.dot import Dot
+from rich.text import Text
 
 from .cli import console
 
 
+class Characters:
+    closed_circle: str = ''
+    open_circle: str = ''
+    arrow_down_right: str = '↘'
+
+
 class Progress (progress.Progress):
 
-    def __init__(self, tasks: list[Union[str, int]] = [], total: int = 100, transient: bool = False, *args, **kwargs) -> None:
-        super().__init__(progress.TextColumn('{task.description}'),
-                         progress.BarColumn(),
-                         progress.TaskProgressColumn(), *args, **kwargs)
-        # super().__init__(*args, **kwargs)
+    def __init__(self,
+                 tasks: list[Union[str, int]] = [],
+                 total: int = 100,
+                 transient: bool = False,
+                 columns: Optional[Any] = None,
+                 *args, **kwargs) -> None:
+        cols = columns or (progress.TextColumn('{task.description}'),
+                           progress.BarColumn(),
+                           progress.TaskProgressColumn())
+        super().__init__(*cols, *args, **kwargs)
         self.task_map = {}
         for task in tasks:
             self.add_task(task, total=total, transient=transient)
@@ -46,50 +57,39 @@ class Progress (progress.Progress):
         return super().update(task_id=self.task_map[task], completed=completed, *args, **kwargs)
 
 
-class Process (mp.Process):
+class Memory:
 
-    daemon: bool = True
+    log: list[tuple]
 
+    def __init__(self):
+        self.log = []
+        self.check()
+
+    def check(self):
+        used_mem = torch.cuda.memory_allocated()
+        res_mem = torch.cuda.memory_reserved()
+        self.log.append((used_mem, res_mem))
+
+    @group()
     def __rich__(self):
-        if self.is_alive():
-            return '[green]⬤  alive'
-        else:
-            return '[red] stopped'
+        self.check()
+        orig_used_mem, orig_res_mem = self.log[0]
+        used_mem, res_mem = self.log[-1]
 
+        def diff(a, b):
+            return Text(f'{b - a:+10,d}', style='green' if b > a else 'red')
 
-class Queue (tmpq.Queue):
-
-    def __init__(self, maxsize: int = 10, *args, **kwargs):
-        ctx = mp.get_context()
-        self._size = ctx.Value('i', 0)
-        super(Queue, self).__init__(*args, **kwargs, maxsize=maxsize, ctx=ctx)
-
-    def put(self, *args, **kwargs):
-        with self._size.get_lock():
-            self._size.value += 1
-        return super().put(*args, **kwargs)
-
-    def get(self, *args, **kwargs):
-        with self._size.get_lock():
-            self._size.value -= 1
-        return super().get(*args, **kwargs)
-
-    def size(self):
-        return self._size.value
-
-
-class Manager (mpman.SyncManager):
-    Queue = Queue
-    Dot = Dot
-
-
-Manager.register('Queue', Queue)
-Manager.register('Dot', Dot, exposed=['__setitem__', '__getitem__', '__call__', '__rich__', '_table'])
+        yield Text('Current Usage', style='yellow')
+        yield Text(f'{100 * (used_mem / res_mem):3,.3f}')
+        yield Text(f'{used_mem:10,d} / {res_mem:10,d}')
+        if len(self.log) > 1:
+            yield Text('Change', style='yellow')
+            yield diff(orig_used_mem, used_mem) + ' / ' + diff(orig_res_mem, res_mem)
 
 
 class Alive:
 
-    _alive: bool = True
+    _alive: bool
     callback: Optional[Callable]
 
     def __init__(self, state: bool = True, callback: Optional[Callable] = None) -> None:
@@ -102,13 +102,44 @@ class Alive:
     def stopped(self):
         self._alive = False
 
-    def __rich__(self):
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         if self.callback is not None and self._alive:
             self._alive = self.callback()
         if self._alive:
-            return '[green]⬤  alive'
+            # yield f'[green]{Characters.closed_circle}  alive'
+            yield f'[green]{Characters.closed_circle}  active'
         else:
-            return '[red] stopped'
+            yield f'[red]{Characters.open_circle}  inactive'
+
+    def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
+        # return Measurement(8, 10)
+        return Measurement(10, 12)
+
+
+class Status:
+
+    _status: str
+    callback: Optional[Callable]
+
+    states: dict[str, Any] = {
+        'active': Text(f'{Characters.closed_circle}  active', style='green'),
+        'inactive': Text(f'{Characters.open_circle}  inactive', style='red'),
+        'alive': Text(f'{Characters.closed_circle}  alive', style='green'),
+        'stopped': Text(f'{Characters.open_circle}  stopped', style='red'),
+        'open': Text(f'{Characters.open_circle}', style='red'),
+        'closed': Text(f'{Characters.closed_circle}', style='green'),
+        'working': Styled(Spinner('dots'), style='cyan'),
+    }
+
+    def __init__(self, status: str, callback: Optional[Callable] = None) -> None:
+        self._status = status
+        self.callback = callback
+
+    def set(self, status: str):
+        self._status = status
+
+    def __rich__(self):
+        return self.states.get(self._status)
 
 
 class Table (rich.table.Table):
@@ -121,6 +152,23 @@ class Table (rich.table.Table):
         super().__init__(*args, **{**defaults, **kwargs})
 
 
-def section(message: str, module: str = 'Trainer', color: str = 'blue'):
+def log(msg: Union[str, RenderableType]):
+
+    # # Log using current trainer
+    # from .trainer import get_current_trainer
+    # trainer = get_current_trainer()
+
+    # trainer.logs.append(msg)
+
+    console.log(msg)
+
+
+def section(message: str, module: str = 'Trainer', color: str = 'blue', cons: Optional[Console] = None):
     msg = Padding(f'[ {module} ] {message}', (1, 0), style=color)
+    if cons is not None:
+        cons.print(msg)
     console.print(msg)
+
+
+def check(msg: str, color: str = 'blue'):
+    console.print(f' [{color}]{Characters.closed_circle}[reset]   {msg}')

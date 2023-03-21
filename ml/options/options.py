@@ -1,18 +1,27 @@
+from __future__ import annotations
 import abc
+import argparse
 from inspect import isclass
-from typing import Optional
+import sys
+from typing import Any, Optional
 
 from torch import nn
 
-from .dot import Dot, DotItem
 from ..cli import console
+from .dot import Dot, DotItem
 
 
 class Options (Dot):
     pass
 
 
+class OptionsItem (DotItem):
+    pass
+
+
 class OptionsModule:
+
+    opts: Options
 
     _children: dict
 
@@ -22,50 +31,134 @@ class OptionsModule:
             Calls pre() hook on the way down 
         """
         super().__init__()
+        self.apply_opts(opts)
+
+    @abc.abstractmethod
+    def pre(self, o: Options):
+        return o
+
+    @abc.abstractmethod
+    def build(self):
+        return
+
+    def apply_opts(self, opts: Optional[Options] = None):
 
         self.opts = opts if opts is not None else Options()
-        self.opts = self._add_defaults(self.opts)
+        self.opts = self._get_defaults(self.opts)
         self.pre(self.opts)
-
         self._bind_opts(self.opts)
+
         self._children = {}
         for k, child in self._get_annotations().items():
             if isclass(child) and issubclass(child, OptionsModule):
                 if k in self.opts:
-                    child = child(self.opts[k])
-                    self._children[k] = child
+                    # child = child(self.opts._dotitems()._soft_update(self.opts[k]))
+                    child = child(self.opts._dotitems()._update(self.opts[k]))
+                else:
+                    child = child(self.opts._dotitems())
+                self._children[k] = child
 
     @classmethod
     def _get_annotations(cls):
+        """ 
+        Collects class annotations by combining own annotations with inherited
+        annotations
+        """
 
         # Collect annotated
         annotated = {**cls.__annotations__}
 
-        # Collect inherited OptionsModules
+        # Collect inherited OptionsModules annotations
         for parent in cls.__bases__:
             if (issubclass(parent, OptionsModule)
                     and parent is not OptionsModule
                     and parent is not cls):
                 for k, p in parent._get_annotations().items():
-                    if isclass(p) and issubclass(p, OptionsModule):
+                    if not k in annotated:
                         annotated[k] = p
 
         return annotated
 
     @classmethod
-    def _add_defaults(cls, opts: Options):
+    def _get_defaults(cls, opts: Options):
+        """ 
+        Goes through class annotations and adds default values (if they exist)
+        to opts.
+            -> Primitive defaults are added to opts
+            -> OptionsModules are instantiated
+        """
 
         for (k, v) in cls._get_annotations().items():
-            if (v in [int, float, str] and not k in opts and k[0] != '_'):
-                attr = getattr(cls, k, None)
-                if attr is not None:
-                    opts[k] = attr
+            if k[0] != '_' and not k in opts:
+                if v in [int, float, str, bool, list]:
+                    attr = getattr(cls, k, None)
+                    if attr is not None:
+                        opts[k] = attr
 
         return opts
 
+    @classmethod
+    def parse(cls):
+        """
+        Uses class annotations in order to build an argument parser which
+        accepts all primitive annotations as arguments. Parses from sys.argv
+        and returns an Options dictionary of provided arguments.
+        """
+
+        parser = argparse.ArgumentParser(prog='Options')
+
+        def add_argument(k: str, v: Any):
+            tag = f'--{k}'
+            if v == bool:
+                default = getattr(cls, k, None)
+                parser.add_argument(tag, action='store_true', default=default)
+            elif v == str:
+                parser.add_argument(tag, type=v, default=None)
+            elif v in [int, float]:
+                parser.add_argument(tag, type=v, default=None)
+            elif v == list[str]:
+                parser.add_argument(tag, nargs='+', default=None)
+
+        def recur(module: type[OptionsModule], prefix: str = ''):
+            p = prefix + '.' if prefix != '' else ''
+            for k, v in module._get_annotations().items():
+                if k[0] != '_':
+                    if isclass(v) and (issubclass(v, OptionsModule)
+                                       and v is not OptionsModule
+                                       and v is not module):
+                        recur(v, p + k)
+                    else:
+                        add_argument(p + k, v)
+
+        recur(cls)
+        args = parser.parse_args(sys.argv[2:])
+        args = {k: v for k, v in args.__dict__.items() if v is not None}
+        args = Options(args)
+        return args
+
+    @classmethod
+    def required(cls) -> Options:
+        """
+        Uses class annotations to build an Options dictionary representing all
+        required parameters of OptionsModule.
+        """
+
+        annotations = cls._get_annotations()
+
+        required = Options()
+        for k, v in annotations.items():
+            if isclass(v) and (issubclass(v, OptionsModule)
+                               and v is not OptionsModule
+                               and v is not cls):
+                required[k] = v.required()
+            else:
+                required[k] = DotItem(k, getattr(cls, k, None), v)
+
+        return required
+
     def _bind_opts(self, opts: Options):
         """ 
-        Binds opts to self
+        Binds opts to self and children
         """
 
         for (k, v) in vars(opts).items():
@@ -73,6 +166,22 @@ class OptionsModule:
                 if isinstance(v, DotItem):
                     setattr(self, k, v.value)
                     self.__dict__[k] = v.value
+
+    def _gather_opts(self):
+        opts = self.opts()
+        for name, child in self._children.items():
+            opts[name] = child._gather_opts()
+        return opts
+
+    def _gather_params(self):
+        params = Dot()
+        for key, val in vars(self).items():
+            if key[0] != '_':
+                if isinstance(val, OptionsModule):
+                    params[key] = val._gather_params()
+                elif type(val) in [bool, int, float, str, list]:
+                    params[key] = val
+        return params
 
     def _build(self):
         """ 
@@ -89,43 +198,3 @@ class OptionsModule:
 
         self.build()
         return self
-
-    @abc.abstractclassmethod
-    def pre(self, o: Options):
-        return o
-
-    @abc.abstractclassmethod
-    def build(self):
-        return
-
-    @classmethod
-    def required(cls, opts: Optional[Options] = None) -> Options:
-
-        annotated = cls._get_annotations()
-
-        required = Options()
-        for k, child in annotated.items():
-            if isclass(child) and issubclass(child, OptionsModule):
-                required[k] = child.required()
-            else:
-                if k != 'self':
-                    if (k in cls.__dict__ and cls.__dict__[k] is not None):
-                        value = cls.__dict__[k]
-                    else:
-                        value = None
-                    required[k] = DotItem(key=k, value=value, type=child)
-
-        if opts is not None:
-            for (k_req, v_req) in required:
-                for (k_opt, v_opt) in opts:
-                    if k_req == k_opt:
-                        v_req.value = v_opt.value
-                        break
-
-        if isinstance(cls, type) and hasattr(cls, 'opts'):
-            for (k_req, v_req) in required:
-                for (k_opt, v_opt) in cls.__dict__['opts']:
-                    if k_req == k_opt:
-                        v_req.value = v_opt.value
-
-        return required

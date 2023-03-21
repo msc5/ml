@@ -1,7 +1,5 @@
-import contextlib
 import math
 import os
-import pickle5 as pickle
 import random
 from typing import Any, Callable, Iterable, Literal, Optional, Union, cast
 
@@ -10,16 +8,14 @@ from rich.console import group
 from rich.progress import track
 from rich.table import Table
 import torch
-import torch.nn.functional as F
 
-from src.ml.options import Dot
+from ..options import Dot
 
 from ... import ml
 from ..cli import console
 from ..data.d4rl import make_d4rl_dataset
 from ..options import OptionsModule
-
-DataDict = dict[str, torch.Tensor]
+from ..renderables import section, check
 
 
 class OfflineDataset (OptionsModule):
@@ -32,104 +28,86 @@ class OfflineDataset (OptionsModule):
 
     env: Optional[str] = None
     discount: float = 0.99
+    terminal_penalty: float = -10.0
     max_length: int = 1000
 
-    unique: Optional[int] = None
     capacity: Optional[int] = None
+
+    def _build(self):
+        if self.env is not None:
+            section('Building', module='Dataset', color='green')
+        return super()._build()
 
     def build(self):
 
-        if self.env is not None:
-            ml.section('Building Dataset', module='Dataset', color='green')
-
-        self.data: DataDict
-
         self.metrics = Dot({'i': 0, 'n': 0})
-        self.episodes: list[torch.Tensor] = []
-        self.lengths = []
+        self._episodes: list[torch.Tensor] = []
+        self._lengths = []
         self.data = {key: torch.empty(0) for key in ['X', 'A', 'R', 'T', 'V']}
         self.stats = {key: torch.empty(0) for key in ['X', 'A', 'R', 'T', 'V']}
 
         if self.env is not None:
             self.load(self.env)
 
-    def save(self, data: DataDict, env: str):
+    def save(self, data: dict, env: str):
         path = os.path.join('datasets', env)
         file = os.path.join(path, 'data.pt')
         if not os.path.exists(path):
             os.makedirs(path)
         torch.save(data, file, pickle_protocol=5)
-        console.print(f'Saved Dataset to {file}')
+        check(f'Saved Dataset to {file}', color='green')
 
     def load(self, env: str):
 
         save = False
 
-        def check(msg: str):
-            console.print(f' [green]⬤[reset]   {msg}')
-
         # Load raw data
         path = os.path.join('datasets', env, 'data.pt')
         if self.reload or not os.path.exists(path):
             raw = make_d4rl_dataset(env)
-            console.print('Created Dataset')
+            check('Created Dataset', color='green')
         else:
             raw = torch.load(path)
-            console.print(f'Loaded Dataset from {path}')
+            check(f'Loaded Dataset from {path}', color='green')
 
         X = raw['observations']
+        N = raw['next_observations']
         A = raw['actions']
         if len(A.shape) == 1:
             A = A[:, None]
         R = raw['rewards'][:, None]
         D = raw['terminals'][:, None]
-        if 'timeouts' in raw:
-            D += raw['timeouts'][:, None]
-        D[-1] = True
+        # if 'timeouts' in raw:
+        #     D += raw['timeouts'][:, None]
+        # D[-1] = True
+        # R[D] = self.terminal_penalty
 
         assert len(X) == len(A) == len(R) == len(D)
 
         if 'episodes' in raw and not self.reload:
-            self.episodes = raw['episodes']
-            check('Loaded Dataset Splits')
+            self._episodes = raw['episodes']
+            check('Loaded Dataset Splits', color='green')
         else:
-            ends = D.squeeze().nonzero()
-            ends[1:] = ends[1:] - ends[:-1]
-            ends[0] = ends[0] + 1
-            self.episodes = list(torch.arange(len(D)).split(tuple(ends)))
-            raw['episodes'] = self.episodes
+            raw['episodes'] = self.split(D)
             save = True
-            check('Computed Dataset Splits')
+            check('Computed Dataset Splits', color='green')
 
-        self.metrics = Dot({'i': len(X), 'n': len(self.episodes)})
+        self.metrics = Dot({'i': len(X), 'n': len(self._episodes)})
 
-        self.lengths = [len(e) for e in self.episodes]
+        self._lengths = [len(e) for e in self._episodes]
         self.x_size = X.shape[-1]
         self.a_size = A.shape[-1]
 
         if 'values' in raw and self.discount in raw['values'] and not self.reload:
             V = raw['values'][self.discount]
-            check('Loaded Values')
+            check('Loaded Values', color='green')
         else:
             V = self.values(R, self.discount)
             raw['values'] = {self.discount: V}
             save = True
-            check('Computed Values')
+            check('Computed Values', color='green')
 
-        # def generate_tests():
-        #     import matplotlib.pyplot as plt
-        #     fig, ax = plt.subplots(figsize=(10, 10))
-        #     episodes = random.sample(range(len(self.episodes)), 10)
-        #     for ep in episodes:
-        #         ax.plot(V[self.episodes[ep]], label=f'{ep}')
-        #     # ax.plot(V[self.episodes[0]])
-        #     # ax.plot(R[self.episodes[0]])
-        #     ax.legend()
-        #     plt.savefig('values_normed_2')
-        # generate_tests()
-        # breakpoint()
-
-        self.data = {'X': X, 'A': A, 'R': R, 'T': D, 'V': V}
+        self.data = {'X': X, 'N': N, 'A': A, 'R': R, 'T': D, 'V': V}
         if 'infos/qpos' in raw:
             self.data['QP'] = raw['infos/qpos']
         if 'infos/qvel' in raw:
@@ -137,18 +115,32 @@ class OfflineDataset (OptionsModule):
 
         if 'stats' in raw and not self.reload:
             self.stats = raw['stats']
-            check('Loaded Stats')
+            check('Loaded Stats', color='green')
         else:
             for key, val in self.track(self.data.items(), description='Stats'):
                 if isinstance(val, torch.Tensor):
                     self.stats[key] = self.stat(val)
             raw['stats'] = self.stats
             save = True
-            check('Computed Stats')
+            check('Computed Stats', color='green')
 
         if save: self.save(raw, env)
+        check('Finished', color='green')
 
-        console.print(self.table())
+    def split(self, terminals: torch.Tensor):
+
+        # Nonzero indices of terminals
+        terminals[-1] = True
+        ends = terminals.squeeze().nonzero()
+
+        # Compute lengths of each episode
+        ends[1:] = ends[1:] - ends[:-1]
+        ends[0] = ends[0] + 1
+
+        # Generate list of indices split by each episode
+        self._episodes = list(torch.arange(len(terminals)).split(tuple(ends)))
+
+        return self._episodes
 
     def track(self, iterable: Iterable, description: str = ''):
         if self.debug:
@@ -158,7 +150,7 @@ class OfflineDataset (OptionsModule):
                          description=f' [blue][reset]   Computing {description}...')
 
     def __len__(self):
-        return len(self.episodes)
+        return len(self._episodes)
 
     def values(self, R: torch.Tensor, discount: float):
         """
@@ -171,9 +163,13 @@ class OfflineDataset (OptionsModule):
             V: [ batch, 1 ]
         """
 
-        L, N = max(self.lengths), len(self.lengths)
-        x = R.split(self.lengths)
-        rewards = torch.stack([F.pad(r.squeeze(), (0, L - len(r))) for r in x])
+        L, N = max(self._lengths), len(self._lengths)
+        x = R.split(self._lengths)
+        # breakpoint()
+        # rewards = torch.stack([F.pad(r.squeeze(), (0, L - len(r))) for r in x])
+        rewards = torch.zeros(len(x), L)
+        for i, episode in enumerate(x):
+            rewards[i, 0:len(episode)] = episode.squeeze()
 
         discounts = discount ** (torch.arange(0, L))
         values = torch.zeros_like(rewards)
@@ -185,10 +181,10 @@ class OfflineDataset (OptionsModule):
             values[:, t] = V
         values[:, -1] = values[:, -2]
 
-        values = torch.cat([values[i, :self.lengths[i]] for i in range(N)])
+        values = torch.cat([values[i, :self._lengths[i]] for i in range(N)])
         values = values[:, None]
 
-        assert len(values) == sum(self.lengths)
+        assert len(values) == sum(self._lengths)
 
         return values
 
@@ -399,20 +395,20 @@ class OfflineDataset (OptionsModule):
         return {key: function(data, key) if (key != 'T' and key in self.data.keys()) else data
                 for key, data in batch.items()}
 
-    def split(self, x: torch.Tensor, keys: list[str]):
-        """
-        Splits concatenated tensor into dataset keys.
-        Inputs:
-            x:     [ *, {a, b, c, ...} ]
-            keys:  [ a, b, c, ...]
-        Outputs:
-            batch: { a: [ *, size ], ...}
-        """
-        dim = -1 if len(x.shape) > 1 else 0
-        sizes = [self.data[key].shape[-1] for key in keys]
-        splits = x.split(sizes, dim=dim)
-        split = {key: split for key, split in zip(keys, splits)}
-        return split
+    # def split(self, x: torch.Tensor, keys: list[str]):
+    #     """
+    #     Splits concatenated tensor into dataset keys.
+    #     Inputs:
+    #         x:     [ *, {a, b, c, ...} ]
+    #         keys:  [ a, b, c, ...]
+    #     Outputs:
+    #         batch: { a: [ *, size ], ...}
+    #     """
+    #     dim = -1 if len(x.shape) > 1 else 0
+    #     sizes = [self.data[key].shape[-1] for key in keys]
+    #     splits = x.split(sizes, dim=dim)
+    #     split = {key: split for key, split in zip(keys, splits)}
+    #     return split
 
     def cat(self, x: dict[str, torch.Tensor], keys: list[str]):
         return torch.cat([x[key] for key in keys], dim=-1)
@@ -434,15 +430,11 @@ class OfflineDataset (OptionsModule):
         if episodes == []: episodes = 1
         if isinstance(episodes, int):
             episodes = min(episodes, len(self))
-            if self.unique is not None:
-                _episodes = random.choices(list(range(self.unique)), k=episodes)
-                _episodes = [self.episodes[e] for e in _episodes]
-            else:
-                candidates = [i for i in range(len(self)) if len(self.episodes[i]) >= seq_len]
-                _episodes = random.sample(candidates, episodes)
-                _episodes = [self.episodes[e] for e in _episodes]
+            candidates = [i for i in range(len(self)) if len(self._episodes[i]) >= seq_len]
+            _episodes = random.sample(candidates, episodes)
+            _episodes = [self._episodes[e] for e in _episodes]
         else:
-            _episodes = [self.episodes[s] for s in episodes]
+            _episodes = [self._episodes[s] for s in episodes]
 
         if starts is not None and starts != []:
             batches = [self.sequence(episode, seq_len, start) for episode, start in zip(_episodes, starts)]
@@ -457,6 +449,11 @@ class OfflineDataset (OptionsModule):
         # batches['samples'] = torch.cat(_episodes)
 
         return batches
+
+    def sample_step(self, batch_size: int):
+        ind = torch.randint(0, len(self.data['X']), size=(batch_size,))
+        sample = {key: self.data[key][ind] for key in ['X', 'A', 'N', 'R', 'T', 'V']}
+        return sample
 
     def start(self):
         episode = []
@@ -474,7 +471,7 @@ class OfflineDataset (OptionsModule):
             self.metrics.i += 1
 
         def stop():
-            self.episodes.append(torch.tensor(episode))
+            self._episodes.append(torch.tensor(episode))
 
         return push, stop
 
@@ -484,8 +481,8 @@ class OfflineDataset (OptionsModule):
         title = f'Dataset'
         if self.env is not None: title += f' [reset]([yellow]{self.env}[reset])'
         table = Table(title=title, show_header=False, expand=True, box=box.ROUNDED, style='blue')
-        table.add_row('Episodes', str(len(self.episodes)))
-        table.add_row('Lengths', str(ml.ranges(torch.tensor(self.lengths))))
+        table.add_row('Episodes', str(len(self._episodes)))
+        table.add_row('Lengths', str(ml.ranges(torch.tensor(self._lengths))))
 
         data = Table('Key', 'Size', 'Type', 'Min', 'Mean', 'Max',
                      expand=True, box=box.ROUNDED, style='blue')
@@ -496,3 +493,6 @@ class OfflineDataset (OptionsModule):
         table.add_row('Data', data)
 
         yield table
+
+    def __rich__(self):
+        return self.table()

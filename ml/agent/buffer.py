@@ -4,10 +4,10 @@ import torch
 from torch.utils.data import IterableDataset
 from torch.utils.data import DataLoader
 
-import src.ml as ml
+from ..options import OptionsModule
 
 
-class ReplayBuffer (IterableDataset, ml.Module):
+class ReplayBuffer (IterableDataset, OptionsModule):
     """ 
     Implements a continuous Replay Buffer. Stores transitions from each agent
     step into a tensor and randomly loads them in sequences.

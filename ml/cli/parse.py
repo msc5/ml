@@ -38,6 +38,11 @@ parser.add_argument('--batch_size', type=int, help='Training batch size')
 parser.add_argument('--learning_rate', type=float, help='Training learning rate')
 parser.add_argument('--eval', action='store_true', help='Evaluate model without training')
 
+parser.add_argument('--beam_k', type=int)
+parser.add_argument('--beam_n', type=int)
+parser.add_argument('--beam_start', type=float)
+parser.add_argument('--beam_beta', type=float)
+
 if __name__ == "__main__":
 
     from ..cli import console

@@ -1,74 +1,86 @@
 import copy
-from multiprocessing.managers import BaseManager, SyncManager
-
-from src.ml.cli import console
-from src.ml.renderables import Alive
-from ..options import OptionsModule
-import src.ml as ml
-import torch
-import numpy as np
-import mujoco_py as mjc
-from gym.spaces import Box, Discrete
-from gym import logger
-import gym
+import signal
 from typing import Optional, Union
 
-import torch.multiprocessing as mp
-# mp.set_sharing_strategy('file_system')
+from gym import logger
+import gym
+from gym.spaces import Box, Discrete
+import mujoco_py as mjc
+import numpy as np
+import torch
+import os
 
+from ..cli import console
+from ..mp import ManagedQueue, Process
+from ..options import OptionsModule
+from ..renderables import Alive
+from ..util import quiet
 
 logger.set_level(40)
 
 State = tuple[torch.Tensor, torch.Tensor, torch.Tensor]
 
+os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+
+
+def env_worker(queues: dict[str, ManagedQueue], environment: str):
+
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    if 'breakout' in environment:
+        wrapper = AtariWrapper(environment)
+    else:
+        wrapper = GymWrapper(environment)
+
+    while True:
+
+        function, input = queues['in'].get()
+        if function is None and input is None:
+            wrapper.close()
+            return
+
+        try:
+            if function == 'reset':
+                output = wrapper.reset()
+            elif function == 'step':
+                output = wrapper.step(input.clone())
+            elif function == 'render':
+                output = wrapper.render()
+            elif function == 'score':
+                output = wrapper.score(input)
+            elif function == 'sample_action':
+                output = wrapper.sample_action()
+            else:
+                raise Exception('Invalid function')
+
+            queues['out'].put(output)
+            del function
+            del input
+            del output
+
+        except:
+            wrapper.close()
+            return
+
 
 class Wrapper:
 
-    def __init__(self, manager: SyncManager, environment: str, id: int = 0):
-        self.in_queue, self.out_queue = manager.Queue(), manager.Queue()
+    _alive: bool = False
+
+    def __init__(self, environment: str, id: int = 0):
+
         self.name = f'Env {id}'
         self.status = Alive(state=True)
-        self.process = mp.Process(target=self.worker, name=self.name,
-                                  args=[environment, self.in_queue, self.out_queue])
+
+        # self.process = Process(target=self.worker, name=self.name, args=[environment])
+        self.process = Process(target=env_worker, args=[environment])
+        self.in_queue, self.out_queue = self.process.queues['in'], self.process.queues['out']
         self.process.start()
 
-    def worker(self, environment: str, in_queue: mp.Queue, out_queue: mp.Queue):
-        if 'breakout' in environment:
-            wrapper = AtariWrapper(environment)
-        else:
-            wrapper = GymWrapper(environment)
-
-        try:
-            while True:
-                function, input = in_queue.get()
-                if function is None and input is None:
-                    return
-                if function == 'reset':
-                    output = wrapper.reset()
-                elif function == 'step':
-                    output = wrapper.step(input.clone())
-                elif function == 'render':
-                    output = wrapper.render()
-                elif function == 'score':
-                    output = wrapper.score(input)
-                elif function == 'sample_action':
-                    output = wrapper.sample_action()
-                else:
-                    raise Exception('Invalid function')
-
-                out_queue.put(output)
-                del function
-                del input
-                del output
-
-        except KeyboardInterrupt:
-            # console.log('Terminating Environment Subprocess...')
-            self.status.stopped()
+        self._alive = True
 
     def close(self):
-        self.in_queue.put((None, None))
-        self.process.join()
-        self.status.stopped()
+        self.process.close()
 
     def reset(self):
         self.in_queue.put(('reset', None))
@@ -85,7 +97,7 @@ class Wrapper:
         return result
 
     def render(self, height: int = 256, width: int = 256):
-        with ml.quiet():
+        with quiet():
             self.in_queue.put(('render', (height, width)))
             output = self.out_queue.get()
             result = output.clone()
@@ -115,7 +127,7 @@ class GymWrapper (gym.Env):
     def __init__(self, environment: str):
         super().__init__()
 
-        with ml.quiet():
+        with quiet():
             import d4rl as _
 
         self.env = environment
@@ -188,7 +200,7 @@ class AtariWrapper (OptionsModule, gym.Env):
     def __init__(self, environment: str):
         super().__init__()
 
-        with ml.quiet():
+        with quiet():
             import d4rl_atari as _
 
         self._env = gym.make(environment)
