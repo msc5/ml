@@ -11,8 +11,8 @@ import torch
 
 from ..options import Dot
 
-from ... import ml
 from ..cli import console
+from ..util import ranges
 from ..data.d4rl import make_d4rl_dataset
 from ..options import OptionsModule
 from ..renderables import section, check
@@ -482,7 +482,7 @@ class OfflineDataset (OptionsModule):
         if self.env is not None: title += f' [reset]([yellow]{self.env}[reset])'
         table = Table(title=title, show_header=False, expand=True, box=box.ROUNDED, style='blue')
         table.add_row('Episodes', str(len(self._episodes)))
-        table.add_row('Lengths', str(ml.ranges(torch.tensor(self._lengths))))
+        table.add_row('Lengths', str(ranges(torch.tensor(self._lengths))))
 
         data = Table('Key', 'Size', 'Type', 'Min', 'Mean', 'Max',
                      expand=True, box=box.ROUNDED, style='blue')
