@@ -24,6 +24,7 @@ class OptionsModule:
     opts: Options
 
     _children: dict
+    _is_built: bool = False
 
     def __init__(self, opts: Optional[Options] = None):
         """ 
@@ -197,4 +198,5 @@ class OptionsModule:
             self.__dict__[k] = child
 
         self.build()
+        self._is_built = True
         return self

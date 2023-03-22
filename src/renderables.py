@@ -92,9 +92,15 @@ class Alive:
     _alive: bool
     callback: Optional[Callable]
 
-    def __init__(self, state: bool = True, callback: Optional[Callable] = None) -> None:
+    def __init__(self,
+                 state: bool = True,
+                 callback: Optional[Callable] = None,
+                 true_label: str = 'active',
+                 false_label: str = 'inactive') -> None:
         self.callback = callback
         self._alive = state
+        self.true_label = true_label
+        self.false_label = false_label
 
     def alive(self):
         self._alive = True
@@ -106,14 +112,14 @@ class Alive:
         if self.callback is not None and self._alive:
             self._alive = self.callback()
         if self._alive:
-            # yield f'[green]{Characters.closed_circle}  alive'
-            yield f'[green]{Characters.closed_circle}  active'
+            yield f'[green]{Characters.closed_circle}  {self.true_label}'
         else:
-            yield f'[red]{Characters.open_circle}  inactive'
+            yield f'[red]{Characters.open_circle}  {self.false_label}'
 
     def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
-        # return Measurement(8, 10)
-        return Measurement(10, 12)
+        max_length = 3 + max(len(self.true_label), len(self.false_label))
+        min_length = 3 + max(len(self.true_label), len(self.false_label))
+        return Measurement(min_length, max_length)
 
 
 class Status:

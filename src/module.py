@@ -13,7 +13,7 @@ import torch.nn as nn
 
 from .cli import console
 from .options import Dot, Options, OptionsModule
-from .renderables import Table
+from .renderables import Alive, Table
 
 
 def get_device(dev: Optional[str] = None):
@@ -73,6 +73,14 @@ class Module (OptionsModule, nn.Module):
 
     # ---------------------------------------- Public Methods ---------------------------------------- #
 
+    def select(self):
+
+        # Select all children
+        self._selected = True
+        for c in self.children():
+            if isinstance(c, Module):
+                c.select()
+
     def polyak(self, learner: Module, p: float = 0.005):
         """
         Polyak Averaging
@@ -116,6 +124,7 @@ class Module (OptionsModule, nn.Module):
             if isinstance(child, Module) and not child._hide_grads:
                 if child._is_common:
                     heading = Text(name, style='yellow')
+                    # selected = Alive(child._selected, true_label='selected')
                     table.add_row(heading, child._render_device(), child._render())
                 else:
                     heading = Columns([Text(name, style='bold cyan'), child._render_params()])
