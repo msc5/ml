@@ -109,8 +109,7 @@ class Trainer (Module):
         self._loops = []
         self.metrics = Dot()
         self.timer = Timer()
-        # self.progress = Dot({'session': 0, 'train': 0, 'last': {'save': 0, 'rollout': 0}})
-        self.progress = Steps('session', 'train', 'save', 'rollout')
+        self.progress = Steps(keys=['session', 'train', 'save', 'rollout'])
         self.system = System()
         self.main_thread = Thread(main=True)
         self._logged = Layout()

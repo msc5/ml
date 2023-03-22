@@ -9,7 +9,7 @@ import termios
 import threading
 import time
 import tracemalloc
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 import GPUtil
 import psutil
@@ -438,11 +438,11 @@ class Steps:
     last: dict[str, int]
     timers: dict[str, Timer]
 
-    def __init__(self, *args: str) -> None:
-        self.keys = list(args)
-        self.steps = {key: 0 for key in args}
-        self.last = {key: 0 for key in args}
-        self.timers = {key: Timer() for key in args}
+    def __init__(self, keys: Iterable[str]) -> None:
+        self.keys = list(keys)
+        self.steps = {key: 0 for key in keys}
+        self.last = {key: 0 for key in keys}
+        self.timers = {key: Timer() for key in keys}
 
     def add(self, key: str):
         if not key in self.keys:
