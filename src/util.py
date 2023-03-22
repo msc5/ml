@@ -159,8 +159,13 @@ class Metadata:
 
 class Timer:
 
-    def __init__(self):
+    def __init__(self, name: Optional[str] = None):
         # self._start = self._mark = time.perf_counter()
+        self._start = self._mark = time.time()
+        self._rate = 0.0
+        self._name = name
+
+    def reset(self):
         self._start = self._mark = time.time()
         self._rate = 0.0
 
@@ -176,6 +181,12 @@ class Timer:
             self._rate = 1 / (diff / 60**2)
         return total, diff
 
+    def __enter__(self):
+        self.reset()
+
+    def __exit__(self, *_):
+        console.print(self)
+
     @group()
     def _render_rate(self):
         if self._rate != 0.0:
@@ -184,7 +195,9 @@ class Timer:
     def __rich__(self):
         total, _ = self()
         mins = total / 60
-        if mins < 60:
+        if mins < 1:
+            msg = f'[blue]{total:,.5f}[reset] secs'
+        elif mins < 60:
             msg = f'[blue]{mins:,.2f}[reset] mins'
         else:
             hrs = mins // 60
@@ -192,6 +205,8 @@ class Timer:
             msg = f'[blue]{hrs:,.2f}[reset] hrs [blue]{mins:,.2f}[reset] mins'
         if self._rate != 0.0:
             msg += f' ([cyan]{self._rate:,.2f}[reset] steps/hour)'
+        if self._name is not None:
+            msg += f'{self._name:>15}'
         return msg
 
 
