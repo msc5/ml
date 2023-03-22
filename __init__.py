@@ -1,6 +1,10 @@
 # Matthew (Mar. 21)
 # Some of these are unused
 
+from time import perf_counter
+
+start = perf_counter()
+
 # Core
 from .src.module import *
 from .src.trainer import Trainer, OnlineTrainer
@@ -18,3 +22,6 @@ from .src.shape import Shape
 
 # Renderables
 from .src.renderables import *
+
+stop = perf_counter()
+console.log(f'Import time: {stop - start:3.5f}')
