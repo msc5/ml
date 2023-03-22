@@ -39,7 +39,8 @@ class Module (OptionsModule, nn.Module):
     _selected: bool = False
 
     _param_count: int = 0
-    _grad_norm: Optional[float] = None
+    _out_grad_norm: Optional[float] = None
+    _in_grad_norm: Optional[float] = None
 
     device: torch.device = get_device()
 
@@ -62,14 +63,20 @@ class Module (OptionsModule, nn.Module):
 
         return built
 
-    def _grad_update_hook(self, module: nn.Module, _, out_grad):
+    def _grad_update_hook(self, module: nn.Module, in_grad, out_grad):
         if any([p.requires_grad for p in module.parameters()]):
-            # in_grad = in_grad[0] if isinstance(in_grad, tuple) and len(in_grad) > 0 else None
+
             out_grad = out_grad[0] if isinstance(out_grad, tuple) and len(out_grad) > 0 else None
             if out_grad is not None:
-                self._grad_norm = out_grad.detach().norm().item()
+                self._out_grad_norm = out_grad.detach().norm().item()
             else:
-                self._grad_norm = None
+                self._out_grad_norm = None
+
+            in_grad = in_grad[0] if isinstance(in_grad, tuple) and len(in_grad) > 0 else None
+            if in_grad is not None:
+                self._in_grad_norm = in_grad.detach().norm().item()
+            else:
+                self._in_grad_norm = None
 
     # ---------------------------------------- Public Methods ---------------------------------------- #
 
@@ -102,16 +109,28 @@ class Module (OptionsModule, nn.Module):
 
     @group()
     def _render_params(self):
+
         high, low = 1e-3, 1e-6
         msg = f'[blue]( {self._param_count:,} )[reset]'
-        if self._grad_norm is not None:
-            if self._grad_norm > high:
+
+        if self._out_grad_norm is not None:
+            if self._out_grad_norm > high:
                 color = '[green]'
-            elif high > self._grad_norm > low:
+            elif high > self._out_grad_norm > low:
                 color = '[yellow]'
             else:
                 color = '[red]'
-            msg += ' <- ' + color + f'𝝯 {self._grad_norm:5.2e}'
+            msg += ' <- ' + color + f'𝝯 {self._out_grad_norm:5.2e}'
+
+        # if self._in_grad_norm is not None:
+        #     if self._in_grad_norm > high:
+        #         color = '[green]'
+        #     elif high > self._in_grad_norm > low:
+        #         color = '[yellow]'
+        #     else:
+        #         color = '[red]'
+        #     msg = color + f'𝝯 {self._out_grad_norm:5.2e}' + ' <- ' + msg
+
         yield msg
 
     @group()
