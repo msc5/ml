@@ -214,7 +214,7 @@ class OfflineDataset (OptionsModule):
 
         # Compute Ranges
         (low, _), (high, _) = x.min(0), x.max(0)
-        ranges = ml.ranges(x)
+        r = ranges(x)
 
         # Compute Moments
         if x.is_floating_point():
@@ -241,7 +241,7 @@ class OfflineDataset (OptionsModule):
                 'high': high, 'low': low,
                 'mean': mean, 'var': var,
                 'shape': shape, 'size': size,
-                'type': type, 'ranges': ranges}
+                'type': type, 'ranges': r}
 
     def discretize(self,
                    x: torch.Tensor,
