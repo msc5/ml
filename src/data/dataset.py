@@ -77,8 +77,8 @@ class OfflineDataset (OptionsModule):
             A = A[:, None]
         R = raw['rewards'][:, None]
         D = raw['terminals'][:, None]
-        # if 'timeouts' in raw:
-        #     D += raw['timeouts'][:, None]
+        if 'timeouts' in raw:
+            D += raw['timeouts'][:, None]
         # D[-1] = True
         # R[D] = self.terminal_penalty
 
