@@ -510,8 +510,10 @@ class OnlineTrainer (Trainer):
 
     def start(self):
         super().start()
-        self.agent_rows = ['Episode', 'Environment', 'Score', 'Reward', 'Returns', 'Steps', 'Status']
-        self.agent_table = Table(*self.agent_rows, show_header=True, title='Results')
+        self.agent_cols = ['Episode', 'Environment', 'Score', 'Reward', 'Returns', 'Step', 'Status']
+        self.agent_tags = ['episode', 'environment', 'score', 'reward', 'returns', 'step', 'status']
+        self.history = []
+        self.agent_table = Table(*self.agent_cols, show_header=True, title='Results')
 
     @rgroup()
     def dashboard(self):
@@ -549,17 +551,6 @@ class OnlineTrainer (Trainer):
             else:
                 return f'{data}'
 
-        def add_row(run: dict):
-            if 'step' in run:
-                self.agent_table.add_row(f'{format(run["episode"])}',
-                                         f'{format(run["environment"])}',
-                                         f'{format(run["score"])}',
-                                         f'{format(run["reward"])}',
-                                         f'{format(run["returns"])}',
-                                         f'{format(run["step"])}',
-                                         run['status'],
-                                         style='green' if run['status'] == 'alive' else 'red')
-
         def stat(data: dict):
             mean, std = 0.0, 0.0
             if data:
@@ -568,17 +559,28 @@ class OnlineTrainer (Trainer):
                 if len(scores) > 0:
                     mean = scores.mean().item()
                     std = scores.std().nan_to_num().item()
-                    self.agent_table.add_section()
-                    self.agent_table.add_row(None, None, f'{mean:3.3f} ± {std:3.3f}')
-                    self.agent_table.add_section()
             return mean, std
 
         def ordered(data):
             return sorted(data.items(), key=lambda x: -(x[1].get('score', [0]) or [0])[-1])
 
+        table = Table(*self.agent_cols, show_header=True, title='Results')
+
+        rows = []
         for _, run in ordered(cache):
-            add_row(run)
+            row = (f'{format(run[tag])}' for tag in self.agent_tags)
+            rows.append(row)
+
         mean, std = stat(cache)
+        stats = f'{mean:3.3f} ± {std:3.3f}'
+
+        self.history = [(rows, stats)] + self.history[:5]
+        for (rows, stats) in self.history:
+            for row in rows:
+                table.add_row(*row, style='red')
+            table.add_section()
+            table.add_row(None, None, stats)
+            table.add_section()
 
         return mean, std
 
