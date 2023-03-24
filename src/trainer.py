@@ -568,12 +568,13 @@ class OnlineTrainer (Trainer):
         table.add_row(None, None, stats)
         table.add_section()
 
-        self.tables = [table] + self.tables[:5]
+        self.tables.append((cache['mean'], table))
 
     @rgroup()
     def _render(self):
         yield self.header
-        for table in self.tables:
+        tables = list(sorted(self.tables, key=lambda x: -x[0]))
+        for _, table in tables[:6]:
             yield table
 
     def __rich__(self):
