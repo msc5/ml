@@ -432,12 +432,12 @@ class Trainer (Module):
             Layout(name='info'),
             Layout(name='system'))
         layout['content'].split_row(
-            Layout(name='meta'),
-            Layout(name='metrics'),
-            Layout(name='progress'))
+            Layout(name='meta', ratio=1),
+            Layout(name='metrics', ratio=2),
+            Layout(name='progress', ratio=1))
         layout['content']['meta'].split_column(
             Layout(name='status'),
-            Layout(name='dataset', visible=False))
+            Layout(name='agent', visible=False))
 
         layout['title']['run'].update(self.renderables.title())
         layout['title']['info'].update(self.renderables.info())
@@ -514,30 +514,14 @@ class OnlineTrainer (Trainer):
 
     def start(self):
         super().start()
-        self.cols = ['Episode', 'Environment', 'Score', 'Reward', 'Returns', 'Steps', 'Status']
-        self.tags = ['episode', 'environment', 'score', 'reward', 'returns', 'steps', 'status']
+        # self.tags = ['episode', 'environment', 'score', 'reward', 'returns', 'steps', 'status']
+        self.tags = ['score', 'returns', 'steps']
+        # self.tags = ['episode', 'score', 'returns', 'steps', 'status']
+        self.cols = [t.capitalize() for t in self.tags]
         self.tables = []
 
-        columns = (Column(col, ratio=1) for col in self.cols)
+        columns = (Column(col, ratio=1, style='bold yellow') for col in self.cols)
         self.header = Table(*columns, show_header=True)
-
-    @rgroup()
-    def dashboard(self):
-        super().dashboard()
-        if self.mode == 'eval':
-
-            @rgroup()
-            def combine():
-                yield self.agent
-                layout = Layout()
-                layout.split_row(Layout(name='progress'), Layout(name='metrics'))
-                layout['progress'].update(self.renderables.dot('Threads', self.main_thread))
-                layout['metrics'].update(self.renderables.dot('Metrics', self.metrics))
-                yield layout
-
-            self.layout.split_column(self.layout['title'], combine())
-
-        yield self.layout
 
     def _init_screens(self):
         screens = super()._init_screens()
@@ -559,26 +543,55 @@ class OnlineTrainer (Trainer):
             return data
 
         columns = (Column(col, ratio=1) for col in self.cols)
-        table = Table(*columns, show_header=False)
+        table = Table(*columns, show_header=True, box=None, header_style='bold yellow')
         for run in ordered(cache).values():
             row = (f'{format(run[tag])}' for tag in self.tags)
-            table.add_row(*row, style='green' if run['status'] == 'alive' else 'red')
-        stats = f'[cyan]{cache["mean"]:3.3f} ± {cache["std"]:3.3f}'
+            table.add_row(*row)
+        stats = f'[bold green]{cache["mean"]: 3.3f} ± {cache["std"]:3.3f}'
         table.add_section()
-        table.add_row(None, None, stats)
+        table.add_row(None, stats)
         table.add_section()
+        table = Panel(table, border_style='yellow', title=f'Run {len(self.tables)}', title_align='left')
 
         self.tables.append((cache['mean'], table))
 
     @rgroup()
-    def _render(self):
-        yield self.header
+    def _render_table(self):
+        # yield self.header
         tables = list(sorted(self.tables, key=lambda x: -x[0]))
         for _, table in tables[:6]:
             yield table
 
+    @rgroup()
+    def dashboard(self):
+        super().dashboard()
+
+        # self.layout['content']['meta']['agent'].visible = True
+        # self.layout['content']['meta']['agent'].update(self._render_table())
+
+        self.layout['content']['metrics'].split_row(
+            Layout(name='met'),
+            Layout(name='agent'))
+        self.layout['content']['metrics']['met'].update(self.renderables.dot('Metrics', self.metrics))
+        self.layout['content']['metrics']['agent'].update(self.renderables.dot('Results', self._render_table()))
+
+        yield self.layout
+
+    @rgroup()
+    def agent_dashboard(self):
+
+        # # Layout
+        # layout = Layout()
+        # layout.split_row(
+        #     Layout(name='meta'),
+        #     Layout(name='table'))
+        # layout['table'].update(self._render_table())
+        # yield layout
+
+        yield self._render_table()
+
     def __rich__(self):
-        return self._render()
+        return self.agent_dashboard()
 
 
 CurrentTrainer: Optional[Trainer] = None
