@@ -436,9 +436,9 @@ class Trainer (Module):
             Layout(name='info'),
             Layout(name='system'))
         layout['content'].split_row(
-            Layout(name='meta', ratio=1),
-            Layout(name='metrics', ratio=2),
-            Layout(name='progress', ratio=1))
+            Layout(name='meta', ratio=2),
+            Layout(name='metrics', ratio=3),
+            Layout(name='progress', ratio=2))
         layout['content']['meta'].split_column(
             Layout(name='status'),
             Layout(name='agent', visible=False))
@@ -462,12 +462,6 @@ class Trainer (Module):
         yield layout
 
     def save(self):
-        # if (self.save_model != 0 and self.progress.train >= self.save_model and not self.debug):
-
-        # Save progress
-        # self.progress.last.save = self.progress.train
-        # with Metadata(self.dir) as meta:
-        #     meta.data['progress'] = self.progress._dict()
 
         # Save weights
         model_path = os.path.join(self.dir, 'model.pt')
@@ -503,21 +497,6 @@ class Trainer (Module):
         console.print('')
 
         self.load_state_dict(state_dict, strict=False)
-
-        # val = torch.load('results/narldiff/580-vtarg2/model.pt', map_location=self.device)
-        # val_dict = {}
-        # for k, v in val.items():
-        #     if 'value' in k:
-        #         val_dict[k] = v
-        #         console.print(f'[green]Loaded {k}')
-        # self.load_state_dict(val_dict, strict=False)
-        # v = 6
-        # val_dir = f'results/narldiff/walk-m{v}'
-        # if not os.path.exists(val_dir):
-        #     os.makedirs(val_dir)
-        # torch.save(self.state_dict(), f'results/narldiff/walk-m{v}/model.pt')
-        # console.print(f'Saved model {val_dir}')
-        # sys.exit(1)
 
     def update_online(self, cache: dict):
 
