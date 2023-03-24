@@ -1,2 +1,2 @@
 from .options import Options, OptionsModule
-from .dot import Dot, Steps
+from .dot import Dot
