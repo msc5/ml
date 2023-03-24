@@ -148,7 +148,7 @@ class Module (OptionsModule, nn.Module):
                 else:
                     heading = Columns([Text(name, style='bold cyan'), child._render_params()])
                     heading = Padding(heading, (0, 1))
-                    panel = Group('', heading, child._render())
+                    panel = Panel(Group(heading, child._render()), border_style='black')
                     uncommons.append(panel)
 
         has_uncommons = len(uncommons) > 0
@@ -157,9 +157,9 @@ class Module (OptionsModule, nn.Module):
         if has_commons and not has_uncommons:
             yield table
         elif not has_commons and has_uncommons:
-            yield Panel(Group(*uncommons), border_style='black')
+            yield Group(*uncommons)
         elif has_commons and has_uncommons:
-            yield Panel(Group(table, *uncommons), border_style='black')
+            yield Group(table, *uncommons)
         else:
             yield self._render_params()
 

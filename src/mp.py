@@ -149,18 +149,21 @@ class Thread (threading.Thread):
     @group()
     def _render(self):
 
-        title = [f'[bold magenta]Thread[reset]', f'[magenta]{self.name}[reset]']
-        if self.isDaemon():
-            title += [f'[red][daemon][reset]']
-        if self.target is not None:
-            title += [f'[magenta]{self.target.__name__}[reset]()']
-
-        render = Group('', Columns([*title, self.alive], padding=(0, 3)))
-        if self.children:
-            render = Group(render, _render_children(self.children))
         if self._is_main:
-            render = Panel(render, style='black')
-        yield render
+            yield _render_children(self.children)
+        else:
+
+            title = [f'[bold magenta]Thread[reset]', f'[magenta]{self.name}[reset]']
+            if self.isDaemon():
+                title += [f'[red][daemon][reset]']
+            if self.target is not None:
+                title += [f'[magenta]{self.target.__name__}[reset]()']
+
+            # render = Group('', Columns([*title, self.alive], padding=(0, 3)))
+            render = Columns([*title, self.alive], padding=(0, 3))
+            if self.children:
+                render = Group(render, _render_children(self.children))
+            yield render
 
     def __rich__(self):
         return self._render()
@@ -199,7 +202,7 @@ class Queue:
     @group()
     def _render(self):
 
-        table = Table(expand=False)
+        table = Table(style='black', box=box.ROUNDED, expand=False)
 
         def bar(key: str):
             _, _, total_out = self.queues[key].size()
@@ -276,7 +279,8 @@ class Process:
         if self.target is not None:
             title += [f'[blue]{self.target.__name__}[reset]()']
 
-        render = Group('', Columns([*title, self.alive], padding=(0, 3)))
+        # render = Group('', Columns([*title, self.alive], padding=(0, 3)))
+        render = Columns([*title, self.alive], padding=(0, 3))
         if self.children:
             render = Group(render, _render_children(self.children))
         yield render
