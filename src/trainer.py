@@ -39,6 +39,7 @@ class Trainer (Module):
     log: bool = False
     debug: bool = False
     mode: str = 'train'
+    online_eval: bool = False
 
     # Loading / Saving
     # e.g. /results/narldiff/{group}/001-spring-green
@@ -115,6 +116,7 @@ class Trainer (Module):
         self.main_thread = Thread(main=True)
         self._logged = Layout()
         self.agent_table = Layout()
+        self._online_results = []
 
         g = Dot()
         g.repo = git.Repo(os.getcwd())  # type: ignore
@@ -417,6 +419,8 @@ class Trainer (Module):
                    'dataset': Live(self.dataset.table(), **screen_args),
                    'logged': Live(self._logged, **screen_args),
                    'config': Fuzzy(console, config)}
+        if self.online_eval:
+            screens['agent'] = Live(self, **screen_args)
         return screens
 
     @rgroup()
@@ -446,6 +450,14 @@ class Trainer (Module):
         layout['content']['metrics'].update(self.renderables.dot('Metrics', self.metrics))
         layout['content']['progress'].update(self.renderables.progress())
         self.layout = layout
+
+        if self.online_eval:
+            self.layout['content']['metrics'].split_row(
+                Layout(name='met'),
+                Layout(name='agent'))
+            self.layout['content']['metrics']['met'].update(self.renderables.dot('Metrics', self.metrics))
+            self.layout['content']['metrics']['agent'].update(
+                self.renderables.dot('Results', self._render_online_results()))
 
         yield layout
 
@@ -507,29 +519,7 @@ class Trainer (Module):
         # console.print(f'Saved model {val_dir}')
         # sys.exit(1)
 
-
-class OnlineTrainer (Trainer):
-
-    seed_episodes: int = 1000
-
-    def start(self):
-        super().start()
-        # self.tags = ['episode', 'environment', 'score', 'reward', 'returns', 'steps', 'status']
-        self.tags = ['score', 'returns', 'steps']
-        # self.tags = ['episode', 'score', 'returns', 'steps', 'status']
-        self.cols = [t.capitalize() for t in self.tags]
-        self.tables = []
-
-        columns = (Column(col, ratio=1, style='bold yellow') for col in self.cols)
-        self.header = Table(*columns, show_header=True)
-
-    def _init_screens(self):
-        screens = super()._init_screens()
-        screen_args = {'refresh_per_second': 8, 'screen': True, 'console': console}
-        screens['agent'] = Live(self, **screen_args)
-        return screens
-
-    def update_agent_table(self, cache: dict):
+    def update_online(self, cache: dict):
 
         def format(data: Any):
             if type(data) == float:
@@ -542,56 +532,27 @@ class OnlineTrainer (Trainer):
             data = dict(sorted(data.items(), key=lambda x: -x[1]['score']))
             return data
 
-        columns = (Column(col, ratio=1) for col in self.cols)
+        tags = ['score', 'returns', 'steps']
+        cols = [t.capitalize() for t in tags]
+
+        columns = (Column(col, ratio=1) for col in cols)
         table = Table(*columns, show_header=True, box=None, header_style='bold yellow')
         for run in ordered(cache).values():
-            row = (f'{format(run[tag])}' for tag in self.tags)
+            row = (f'{format(run[tag])}' for tag in tags)
             table.add_row(*row)
         stats = f'[bold green]{cache["mean"]: 3.3f} ± {cache["std"]:3.3f}'
         table.add_section()
         table.add_row(None, stats)
         table.add_section()
-        table = Panel(table, border_style='yellow', title=f'Run {len(self.tables)}', title_align='left')
+        table = Panel(table, border_style='yellow', title=f'Run {len(self._online_results)}', title_align='left')
 
-        self.tables.append((cache['mean'], table))
+        self._online_results.append((cache['mean'], table))
 
     @rgroup()
-    def _render_table(self):
-        # yield self.header
-        tables = list(sorted(self.tables, key=lambda x: -x[0]))
+    def _render_online_results(self):
+        tables = list(sorted(self._online_results, key=lambda x: -x[0]))
         for _, table in tables[:6]:
             yield table
-
-    @rgroup()
-    def dashboard(self):
-        super().dashboard()
-
-        # self.layout['content']['meta']['agent'].visible = True
-        # self.layout['content']['meta']['agent'].update(self._render_table())
-
-        self.layout['content']['metrics'].split_row(
-            Layout(name='met'),
-            Layout(name='agent'))
-        self.layout['content']['metrics']['met'].update(self.renderables.dot('Metrics', self.metrics))
-        self.layout['content']['metrics']['agent'].update(self.renderables.dot('Results', self._render_table()))
-
-        yield self.layout
-
-    @rgroup()
-    def agent_dashboard(self):
-
-        # # Layout
-        # layout = Layout()
-        # layout.split_row(
-        #     Layout(name='meta'),
-        #     Layout(name='table'))
-        # layout['table'].update(self._render_table())
-        # yield layout
-
-        yield self._render_table()
-
-    def __rich__(self):
-        return self.agent_dashboard()
 
 
 CurrentTrainer: Optional[Trainer] = None
