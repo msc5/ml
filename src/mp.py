@@ -3,28 +3,30 @@ import multiprocessing.managers as mpman
 import threading
 from typing import Callable, Iterable, Optional
 
+from rich import box
 from rich.columns import Columns
-from rich.console import group
+from rich.console import RenderableType, group
 import rich.progress as progress
-from rich.text import Text
 import torch.multiprocessing as mp
 import torch.multiprocessing.queue as tmpq
 import wandb
 
 from .cli import console
-from .options.dot import Dot
-from .renderables import Alive, Progress, section
 from .io import generate_name
+from .options.dot import Dot
+from .renderables import Alive, Progress, Table, section
 
 COLUMN_WIDTH = 20
 
 
-class Processed:
+class ProcessInfo:
+
     process: Process | None = None
     manager: Manager | None = None
 
 
-class Threaded (threading.local):
+class ThreadInfo (threading.local):
+
     thread: Thread | None = None
     queues: dict[str, dict[str, ManagedQueue]] = {}
     n_procs: int = 0
@@ -34,66 +36,8 @@ class Threaded (threading.local):
     update_thread_start: threading.Event = threading.Event()
 
 
-_processed: Processed = Processed()
-_threaded: Threaded = Threaded()
-
-
-def update_loop(queue: ManagedQueue):
-    while True:
-        cmd, msg = queue.get()
-        try:
-            if cmd == None and msg == None:
-                return
-            elif cmd == 'log video':
-                video = wandb.Video(msg['video'], caption=msg['name'], fps=msg['fps'], format=msg['format'])
-                wandb.log({msg['name']: video}, step=msg['step'])
-            elif cmd == 'exception':
-                section('Exception', module=msg.get('module'), color='red')
-                console.log(msg.get('traceback'))
-        except:
-            section('Exception', module='Update Loop', color='red')
-            console.print_exception()
-
-
-class Thread (threading.Thread):
-
-    children: Dot
-    _is_main: bool = False
-
-    def __init__(self, target: Optional[Callable] = None, main: bool = False, *args, **kwargs):
-        super().__init__(target=target, *args, **kwargs)
-
-        self._is_main = main
-        self.name = generate_name()
-        self.alive = Alive(state=self._is_main, callback=self.is_alive)
-        self.target = target
-
-        self.children = Dot()
-        self.children._set_renderable(self.renderable())
-
-        if _threaded.thread is None:
-            _threaded.thread = self
-        else:
-            _threaded.thread.children[self.name] = self.children
-
-    def run(self) -> None:
-        _threaded.thread = self
-        self.alive.alive()
-        result = super().run()
-        self.alive.stopped()
-        # if _threaded.update_thread is not None:
-        #     _threaded.update_thread.join()
-        return result
-
-    def renderable(self):
-        title = [f'[magenta]{self.name}']
-        if self.target is not None:
-            daemon = f'[red]d: [reset]' if self.isDaemon() else ''
-            title += [f'[magenta]({daemon}[reset]{self.target.__name__}[magenta])']
-        return Columns([*title, self.alive], width=COLUMN_WIDTH)
-
-    def __rich__(self):
-        return self.children
+_pinfo: ProcessInfo = ProcessInfo()
+_tinfo: ThreadInfo = ThreadInfo()
 
 
 class ManagedQueue (tmpq.Queue):
@@ -140,14 +84,68 @@ class Manager (mpman.SyncManager):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        if _processed.manager is not None:
+        if _pinfo.manager is not None:
             raise Exception('Manager already running!')
         else:
-            _processed.manager = self
+            _pinfo.manager = self
 
 
 Manager.register('Queue', ManagedQueue, exposed=['get', 'put', 'size'])
 Manager.register('Dot', Dot, exposed=['__setitem__', '__getitem__', '__call__', '__rich__', '_table'])
+
+
+class Thread (threading.Thread):
+
+    children: dict
+
+    _is_main: bool = False
+    _renderable: RenderableType
+
+    def __init__(self, target: Optional[Callable] = None, main: bool = False, *args, **kwargs):
+        super().__init__(target=target, *args, **kwargs)
+
+        self._is_main = main
+        self.name = generate_name()
+        self.target = target
+
+        self.children = {}
+        self._renderable = self._render()
+
+        if _tinfo.thread is None:
+            _tinfo.thread = self
+        else:
+            _tinfo.thread.children[self.name] = self.children
+            _tinfo.thread._renderable = _tinfo.thread._render()
+
+    def run(self) -> None:
+        """
+        Runs target method in new thread.
+        """
+        _tinfo.thread = self
+        result = super().run()
+        return result
+
+    @group()
+    def _render(self):
+
+        alive = Alive(state=self._is_main, callback=self.is_alive)
+        title = [f'[magenta]{self.name}']
+        if self.target is not None:
+            daemon = f'[red]d: [reset]' if self.isDaemon() else ''
+            title += [f'[magenta]({daemon}[reset]{self.target.__name__}[magenta])']
+
+        cols = Columns([*title, alive], width=COLUMN_WIDTH)
+
+        table = Table(box=box.ROUNDED, style='black')
+        for name, child in self.children.items():
+            if hasattr(child, '_render'):
+                table.add_row(name, child._render())
+
+        yield cols
+        yield table
+
+    def __rich__(self):
+        return self._renderable
 
 
 class Queue:
@@ -163,17 +161,17 @@ class Queue:
         self.maxsize = maxsize
         self.group = group
 
-        if _processed.manager is not None:
-            self.manager = _processed.manager
+        if _pinfo.manager is not None:
+            self.manager = _pinfo.manager
         else:
             raise Exception('No Manager Running!')
 
-        if group in _threaded.queues:
-            self.queues = _threaded.queues[group]
+        if group in _tinfo.queues:
+            self.queues = _tinfo.queues[group]
         else:
             self.queues = {'in': self.manager.Queue(maxsize),
                            'out': self.manager.Queue(maxsize)}
-            _threaded.queues.update({group: self.queues})
+            _tinfo.queues.update({group: self.queues})
 
         format = '[progress.percentage]{task.completed} / {task.total}'
         columns = (progress.TextColumn(format), progress.BarColumn(bar_width=15))
@@ -181,7 +179,7 @@ class Queue:
                              'out': Progress(['size'], total=maxsize, columns=columns, expand=True)})
 
     @group()
-    def __rich__(self):
+    def _render(self):
 
         def bar(key: str):
             _, _, total_out = self.queues[key].size()
@@ -191,10 +189,14 @@ class Queue:
         yield bar('in')
         yield bar('out')
 
+    def __rich__(self):
+        return self._render()
+
 
 class Process:
 
-    children: Dot
+    children: dict
+
     queues: dict[str, ManagedQueue]
 
     def __init__(self,
@@ -208,9 +210,9 @@ class Process:
         self.name = name or generate_name()
         self.alive = Alive(state=False)
 
-        self.children = Dot()
-        self.children._set_renderable(self.renderable())
-        self.children._order = 1
+        self.children = {}
+        # self.children = Dot()
+        # self.children._order = 1
 
         if queue is not None:
             self.queue = queue
@@ -219,12 +221,13 @@ class Process:
             self.queue = Queue(group=self.name)
             self.queues = self.queue.queues
 
-        self.children.queue = Dot()
-        self.children.queue._set_renderable(self.queue)
-        self.children.queue._order = -1
+        self.children['queue'] = {}
+        # self.children.queue = Dot()
+        # self.children.queue._set_renderable(self.queue)
+        # self.children.queue._order = -1
 
-        if _threaded.thread is not None and not hidden:
-            _threaded.thread.children[self.name] = self.children
+        if _tinfo.thread is not None and not hidden:
+            _tinfo.thread.children[self.name] = self.children
 
         # # Initialize Update Loop Thread
         # if _threaded.update_thread is None and _processed.manager is not None:
@@ -240,18 +243,10 @@ class Process:
 
     def start(self):
 
-        # if (
-        #         _threaded.update_thread is not None
-        #         and not _threaded.update_thread.is_alive()
-        #         and not _threaded.update_thread_start.is_set()
-        # ):
-        #     _threaded.update_thread_start.set()
-        #     _threaded.update_thread.start()
-
         # Start Process
         self.process.start()
 
-        _threaded.n_procs += 1
+        _tinfo.n_procs += 1
         self.alive.alive()
 
     def close(self):
@@ -261,42 +256,37 @@ class Process:
         self.queues['out'].put((None, None))
         self.process.join()
 
-        _threaded.n_procs -= 1
-        # # Close Update Loop Thread
-        # if (
-        #     _threaded.n_procs == 0
-        #     and _threaded.update_thread is not None
-        #     and _threaded.update_thread_start.is_set()
-        #     and _threaded.update_queue is not None
-        # ):
-        #     _threaded.update_thread_start.clear()
-        #     _threaded.update_queue.put((None, None))
-        #     _threaded.update_thread.join()
-        #     _threaded.update_thread = Thread(target=update_loop, args=[_threaded.update_queue], daemon=True)
-
+        _tinfo.n_procs -= 1
         self.alive.stopped()
 
-    def renderable(self):
+    @group()
+    def _render(self):
+
         title = [f'[blue]{self.name}']
         if self.target is not None:
             title += [f'[blue]([reset]{self.target.__name__}[blue])[reset]']
-        return Columns([*title, self.alive], width=COLUMN_WIDTH)
+        cols = Columns([*title, self.alive], width=COLUMN_WIDTH)
+
+        yield cols
 
     def __rich__(self):
-        return self.children
+        return self._render()
 
 
 class Pool:
+
+    children: dict
 
     def __init__(self, size: int, name: str | None = None) -> None:
         self.size = size
         self.name = name or generate_name()
         self.queue = Queue(group=self.name)
-        self.children = Dot()
 
-        self.children.queue = Dot()
-        self.children.queue._set_renderable(self.queue)
-        self.children.queue._order = -1
+        self.children = {}
+
+        # self.children.queue = Dot()
+        # self.children.queue._set_renderable(self.queue)
+        # self.children.queue._order = -1
 
     def apply_async(self, target: Callable, parameters: Iterable, *args, **kwargs):
 
@@ -305,11 +295,12 @@ class Pool:
 
         for process in self.processes:
             self.children[process.name] = process.children
-        self.children._set_renderable(self.renderable())
-        self.children._order = 2
 
-        if _threaded.thread is not None:
-            _threaded.thread.children[self.name] = self.children
+        # self.children._set_renderable(self.renderable())
+        # self.children._order = 2
+
+        if _tinfo.thread is not None:
+            _tinfo.thread.children[self.name] = self.children
 
         for process in self.processes:
             process.start()
@@ -322,25 +313,19 @@ class Pool:
             self.queue.queues['out'].put((None, None))
         for process in self.processes:
             process.join()
-            _threaded.n_procs -= 1
+            _tinfo.n_procs -= 1
             process.alive.stopped()
-            object.__delattr__(self.children, process.name)
+            del self.children[process.name]
 
-        # # Close Update Loop Thread
-        # if (
-        #         _threaded.update_thread is not None
-        #         and _threaded.update_thread_start.is_set()
-        #         and _threaded.update_queue is not None
-        # ):
-        #     _threaded.update_thread_start.clear()
-        #     _threaded.update_queue.put((None, None))
-        #     _threaded.update_thread.join()
-        #     _threaded.update_thread = Thread(target=update_loop, args=[_threaded.update_queue], daemon=True)
-
-    def renderable(self):
+    @group()
+    def _render(self):
         title = [f'[green]{self.name}']
         # title.append(f'[black]process')
-        return Columns(title, width=COLUMN_WIDTH)
+        cols = Columns(title, width=COLUMN_WIDTH)
+        yield cols
+
+    def __rich__(self):
+        return self._render()
 
     def __enter__(self):
         return self
@@ -350,8 +335,8 @@ class Pool:
 
 
 def get_current_manager():
-    if _processed.manager is not None:
-        return _processed.manager
+    if _pinfo.manager is not None:
+        return _pinfo.manager
     else:
         manager = Manager()
         manager.start()
