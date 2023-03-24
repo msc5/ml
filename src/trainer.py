@@ -5,7 +5,7 @@ import os
 import subprocess
 import threading
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import git
 from humanize import naturalsize
@@ -230,15 +230,8 @@ class Trainer (Module):
         self.start()
         section(f'Training Run [cyan3]{self.name}')
 
-        config = [f'{k}: {str(v.value)}' for k, v in self._gather_opts()]
         self._threads = {loop.__name__: Thread(target=loop, daemon=False) for loop in self._loops}
-        screen_args = {'refresh_per_second': 8, 'screen': True, 'console': console}
-        self.screens = Screens({'live': Live(get_renderable=self.dashboard, **screen_args),
-                                'opts': Live(self.opts, **screen_args),
-                                'dataset': Live(self.dataset.table(), **screen_args),
-                                'logged': Live(self._logged, **screen_args),
-                                'config': Fuzzy(console, config),
-                                'agent': Live(self.agent_table, **screen_args)})
+        self.screens = Screens(self._init_screens())
 
         def block():
             while all([thread.is_alive() for thread in self._threads.values()]):
@@ -415,6 +408,16 @@ class Trainer (Module):
         self.renderables = Dot(title=title, info=info, system=system,
                                dot=dot, progress=progress, status=status)
 
+    def _init_screens(self):
+        config = [f'{k}: {str(v.value)}' for k, v in self._gather_opts()]
+        screen_args = {'refresh_per_second': 8, 'screen': True, 'console': console}
+        screens = {'live': Live(get_renderable=self.dashboard, **screen_args),
+                   'opts': Live(self.opts, **screen_args),
+                   'dataset': Live(self.dataset.table(), **screen_args),
+                   'logged': Live(self._logged, **screen_args),
+                   'config': Fuzzy(console, config)}
+        return screens
+
     @rgroup()
     def dashboard(self):
 
@@ -510,10 +513,12 @@ class OnlineTrainer (Trainer):
 
     def start(self):
         super().start()
-        self.agent_cols = ['Episode', 'Environment', 'Score', 'Reward', 'Returns', 'Step', 'Status']
-        self.agent_tags = ['episode', 'environment', 'score', 'reward', 'returns', 'step', 'status']
+
+        self.cols = ['Episode', 'Environment', 'Score', 'Reward', 'Returns', 'Steps', 'Status']
+        self.tags = ['episode', 'environment', 'score', 'reward', 'returns', 'steps', 'status']
+
         self.history = []
-        self.agent_table = Table(*self.agent_cols, show_header=True, title='Results')
+        self.table = Table(*self.cols, show_header=True, title='Results')
 
     @rgroup()
     def dashboard(self):
@@ -533,48 +538,38 @@ class OnlineTrainer (Trainer):
 
         yield self.layout
 
+    def _init_screens(self):
+        screens = super()._init_screens()
+        screen_args = {'refresh_per_second': 8, 'screen': True, 'console': console}
+        screens['agent'] = Live(self, **screen_args)
+        return screens
+
     def update_agent_table(self, cache: dict):
 
-        def get_last(data):
-            if isinstance(data, list) or isinstance(data, torch.Tensor):
-                if len(data) > 0:
-                    return data[-1]
-                else:
-                    return None
-            else:
-                return data
-
-        def format(data):
-            data = get_last(data)
+        def format(data: Any):
             if type(data) == float:
                 return f'{data: 3.3f}'
             else:
                 return f'{data}'
 
-        def stat(data: dict):
-            mean, std = 0.0, 0.0
-            if data:
-                scores = torch.tensor([e['score'][-1] for e in data.values()
-                                       if (e['score'] is not None and len(e['score']) > 0)])
-                if len(scores) > 0:
-                    mean = scores.mean().item()
-                    std = scores.std().nan_to_num().item()
-            return mean, std
-
         def ordered(data):
-            return sorted(data.items(), key=lambda x: -(x[1].get('score', [0]) or [0])[-1])
-
-        table = Table(*self.agent_cols, show_header=True, title='Results')
+            data = dict(filter(lambda x: isinstance(x[1], dict), data.items()))
+            data = dict(sorted(data.items(), key=lambda x: -x[1]['score']))
+            return data
 
         rows = []
-        for _, run in ordered(cache):
-            row = (f'{format(run[tag])}' for tag in self.agent_tags)
+        for run in ordered(cache).values():
+            row = (f'{format(run[tag])}' for tag in self.tags)
             rows.append(row)
 
-        mean, std = stat(cache)
-        stats = f'{mean:3.3f} ± {std:3.3f}'
+        stats = f'{cache["mean"]:3.3f} ± {cache["std"]:3.3f}'
 
         self.history = [(rows, stats)] + self.history[:5]
+
+    def _render(self):
+
+        table = Table(*self.cols, show_header=True, title='Results')
+
         for (rows, stats) in self.history:
             for row in rows:
                 table.add_row(*row, style='red')
@@ -582,7 +577,10 @@ class OnlineTrainer (Trainer):
             table.add_row(None, None, stats)
             table.add_section()
 
-        return mean, std
+        return table
+
+    def __rich__(self):
+        return self._render()
 
 
 CurrentTrainer: Optional[Trainer] = None

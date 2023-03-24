@@ -158,6 +158,8 @@ class Agent (OptionsModule):
     dead: dict = {}
     cache: dict = {}
 
+    pool: Optional[Pool] = None
+
     buffer: OfflineDataset
 
     def pre(self, o: Options):
@@ -173,6 +175,7 @@ class Agent (OptionsModule):
 
         from ..mp import get_current_manager
         self.manager = get_current_manager()
+        self.io_lock = self.manager.Lock()
 
         self.envs = {}
 
@@ -258,23 +261,31 @@ class Agent (OptionsModule):
 
         return data
 
-    @classmethod
-    def _table(cls, cache: dict, dead: dict):
+    def get_last(self, data: Any):
+        """ 
+        if item is a list, return the last item.
+        """
+        if isinstance(data, list) or isinstance(data, torch.Tensor):
+            if len(data) > 0:
+                return data[-1]
+            else:
+                return None
+        else:
+            return data
+
+    def stat(self, data: dict):
+        scores = torch.tensor([e['score'] for e in data.values()])
+        mean = scores.mean().item()
+        std = scores.std().nan_to_num().item()
+        return mean, std
+
+    def _table(self, cache: dict, dead: dict):
 
         table = Table('Episode', 'Environment', 'Score', 'Reward', 'Returns', 'Steps', 'Status',
                       show_header=True, title='Results')
 
-        def get_last(data: Any):
-            if isinstance(data, list) or isinstance(data, torch.Tensor):
-                if len(data) > 0:
-                    return data[-1]
-                else:
-                    return None
-            else:
-                return data
-
         def format(data: Any):
-            data = get_last(data)
+            data = self.get_last(data)
             if type(data) == float:
                 return f'{data: 3.3f}'
             else:
@@ -390,15 +401,18 @@ class Agent (OptionsModule):
             cache[key].append(val)
 
         returns = cache['returns'][-1] if 'returns' in cache else 0.0
-        cache['step'] = self.steps[env].step
+        cache['steps'] = self.steps[env].step
         cache['reward'].append(data['R'].item())
         cache['returns'].append(returns + cache['reward'][-1])
         cache['score'].append(self.envs[env].score(cache['returns'][-1]) * 100)
 
         if self.episode_is_done(env):
             cache['status'] = 'complete'
-            dead_keys = ['score', 'reward', 'returns', 'step', 'status', 'environment', 'episode']
-            self.dead[self.alive[env]] = {key: val for key, val in cache.items() if key in dead_keys}
+            dead_keys = ['score', 'reward', 'returns', 'steps', 'status', 'environment', 'episode']
+
+            # Collect completed episode
+            self.dead[self.alive[env]] = {key: self.get_last(val) for key, val in cache.items() if key in dead_keys}
+
             actor.after(cache, env)
             self.save(env)
             self.episode_reassign(env)
@@ -436,46 +450,42 @@ class Agent (OptionsModule):
         for env in range(self.parallel):
             self.episode_reassign(env)
 
+        # Initialize pool only once
+        self.pool = self.pool or Pool(4)
+
         # --------------------------------------------------------------------------------
         # Loop
         # --------------------------------------------------------------------------------
 
-        io_lock = self.manager.Lock()
-        with Pool(4) as pool:
+        self.io_queue = self.pool.queue
+        self.pool.apply_async(target=io_loop, parameters=[self.io_lock, dir, log])
 
-            thread = Thread(target=wandb_loop, args=[pool.queue.queues])
-            thread.start()
+        self.metrics.time = Timer()
+        while self.alive:
+            self.metrics.time(reset=True, step=True)
 
-            self.io_queue = pool.queue
-            pool.apply_async(target=io_loop, parameters=[io_lock, dir, log])
+            self.alive = {k: v for k, v in self.alive.items() if v != None}
 
-            self.metrics.time = Timer()
-            while self.alive:
-                self.metrics.time(reset=True, step=True)
+            action = actor.act(self.data, self.cache, self.alive)
+            for act, env in enumerate(self.alive):
+                self.data['A'][env] = action[act].cpu()
 
-                self.alive = {k: v for k, v in self.alive.items() if v != None}
+            for env in list(self.alive):
+                self.episode_step(env, actor, render, **kwargs)
 
-                action = actor.act(self.data, self.cache, self.alive)
-                for act, env in enumerate(self.alive):
-                    self.data['A'][env] = action[act].cpu()
+            self.steps.total += 1
 
+            for env in list(self.alive):
+                steps = self.steps[env].step
+                if steps != 0 and (steps in [1, 20, 50] or steps % self.rollout == 0):
+                    self.save(env)
+
+            if stop is not None and stop.is_set():
                 for env in list(self.alive):
-                    self.episode_step(env, actor, render, **kwargs)
+                    self.save(env)
+                break
 
-                self.steps.total += 1
-
-                for env in list(self.alive):
-                    steps = self.steps[env].step
-                    if steps != 0 and (steps in [1, 20, 50] or steps % self.rollout == 0):
-                        self.save(env)
-
-                if stop is not None and stop.is_set():
-                    for env in list(self.alive):
-                        self.save(env)
-                    break
-
-        thread.join()
-
+        self.dead['mean'], self.dead['std'] = self.stat(self.dead)
         return self.dead
 
     def close(self):
