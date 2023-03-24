@@ -61,6 +61,11 @@ class Module (OptionsModule, nn.Module):
         # Count parameters
         self._param_count = sum(p.numel() for p in self.parameters() if p.requires_grad)
 
+        # Add child metrics to self
+        for name, child in self.named_children():
+            if isinstance(child, Module):
+                self.metrics[name] = child.metrics
+
         return built
 
     def _grad_update_hook(self, module: nn.Module, in_grad, out_grad):
