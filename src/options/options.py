@@ -1,5 +1,5 @@
 from __future__ import annotations
-import abc
+from abc import abstractmethod
 import argparse
 from inspect import isclass
 import sys
@@ -22,42 +22,72 @@ class OptionsItem (DotItem):
 class OptionsModule:
 
     opts: Options
+    glob: Options
 
     _children: dict
     _is_built: bool = False
 
-    def __init__(self, opts: Optional[Options] = None):
+    def __init__(self, opts: Optional[Options] = None, glob: Optional[Options] = None):
         """ 
         Recursively initialize all annotated and inherited OptionsModules
             Calls pre() hook on the way down 
         """
         super().__init__()
-        self.apply_opts(opts)
+        self.apply_opts(opts, glob)
 
-    @abc.abstractmethod
+    # ---------------------------------------- Abstract Methods ---------------------------------------- #
+
+    @abstractmethod
     def pre(self, o: Options):
         return o
 
-    @abc.abstractmethod
+    @abstractmethod
     def build(self):
         return
 
-    def apply_opts(self, opts: Optional[Options] = None):
+    # ---------------------------------------- Public Methods ---------------------------------------- #
 
+    def apply_opts(self, opts: Optional[Options] = None, glob: Optional[Options] = None):
+        """ 
+        Recursively applies provided opts and glob to self and all children.
+        """
+
+        breakpoint()
+
+        # Initialize opts and glob if they do not exist
         self.opts = opts if opts is not None else Options()
+        self.glob = glob if glob is not None else Options()
+
+        # Initialize Options
+        # 1. Collect default options from annotations into opts
+        # 2. Call pre(o, g) function and possibly mutate opts, glob
+        # 3. Bind opts to self
         self.opts = self._get_defaults(self.opts)
         self.pre(self.opts)
         self._bind_opts(self.opts)
 
+        # Collect and initialize annotated OptionsModules
         self._children = {}
-        for k, child in self._get_annotations().items():
+        for name, child in self._get_submodules().items():
+
+            # Initialize child and add to cache
+            child = child(self.opts, self.glob)
+            self._children[name] = child
+
+    # ---------------------------------------- Static Methods ---------------------------------------- #
+
+    @classmethod
+    def _get_submodules(cls):
+        """ 
+        Collects annotated OptionsModules by checking annotations.
+        """
+
+        submodules = {}
+        for name, child in cls._get_annotations().items():
             if isclass(child) and issubclass(child, OptionsModule):
-                if k in self.opts:
-                    # child = child(self.opts._dotitems()._soft_update(self.opts[k]))
-                    child = child(self.opts._dotitems()._update(self.opts[k]))
-                else:
-                    child = child(self.opts._dotitems())
-                self._children[k] = child
+                submodules[name] = child
+
+        return submodules
 
     @classmethod
     def _get_annotations(cls):
@@ -157,6 +187,8 @@ class OptionsModule:
 
         return required
 
+    # ---------------------------------------- Private Methods ---------------------------------------- #
+
     def _bind_opts(self, opts: Options):
         """ 
         Binds opts to self and children
@@ -169,6 +201,9 @@ class OptionsModule:
                     self.__dict__[k] = v.value
 
     def _gather_opts(self):
+        """ 
+        Recursively traverse OptionsModule and collects opts.
+        """
         opts = self.opts()
         for name, child in self._children.items():
             opts[name] = child._gather_opts()

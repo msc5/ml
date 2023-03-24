@@ -44,9 +44,8 @@ class Module (OptionsModule, nn.Module):
 
     device: torch.device = get_device()
 
-    def __init__(self, opts: Optional[Options] = None):
-        super(Module, self).__init__(opts)
-
+    def __init__(self, opts: Optional[Options] = None, glob: Optional[Options] = None):
+        super(Module, self).__init__(opts, glob)
         self.metrics = Dot()
 
     def _build(self):
