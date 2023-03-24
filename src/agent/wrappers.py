@@ -72,7 +72,6 @@ class Wrapper:
         self.name = f'Env {id}'
         self.status = Alive(state=True)
 
-        # self.process = Process(target=self.worker, name=self.name, args=[environment])
         self.process = Process(target=env_worker, args=[environment])
         self.in_queue, self.out_queue = self.process.queues['in'], self.process.queues['out']
         self.process.start()

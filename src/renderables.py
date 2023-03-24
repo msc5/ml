@@ -151,10 +151,7 @@ class Status:
 class Table (rich.table.Table):
 
     def __init__(self, *args, **kwargs):
-        defaults = {'expand': True,
-                    'show_header': False,
-                    'box': box.SIMPLE,
-                    'style': 'blue'}
+        defaults = {'expand': True, 'show_header': False, 'box': box.SIMPLE, 'style': 'blue'}
         super().__init__(*args, **{**defaults, **kwargs})
 
 

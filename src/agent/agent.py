@@ -353,18 +353,19 @@ class Agent (OptionsModule):
             wandb.log({'performance': table})
 
     def save(self, env: int):
-        cache = {}
-        for key, val in self.cache[env].items():
-            if isinstance(val, list) and len(val) != 0:
-                if isinstance(val[0], torch.Tensor):
-                    cache[key] = torch.stack(val)
-                else:
-                    cache[key] = torch.tensor(val)
-            elif isinstance(val, torch.Tensor):
-                cache[key] = val.clone()
-            else:
-                cache[key] = val
-        self.io_queue.queues['in'].put((env, cache))
+        # cache = {}
+        # for key, val in self.cache[env].items():
+        #     if isinstance(val, list) and len(val) != 0:
+        #         if isinstance(val[0], torch.Tensor):
+        #             cache[key] = torch.stack(val)
+        #         else:
+        #             cache[key] = torch.tensor(val)
+        #     elif isinstance(val, torch.Tensor):
+        #         cache[key] = val.clone()
+        #     else:
+        #         cache[key] = val
+        # self.io_queue.queues['in'].put((env, cache))
+        pass
 
     def episode_reassign(self, env: int, **kwargs):
         if self.queue:
@@ -450,15 +451,15 @@ class Agent (OptionsModule):
         for env in range(self.parallel):
             self.episode_reassign(env)
 
-        # Initialize pool only once
-        self.pool = self.pool or Pool(4)
+        # # Initialize pool only once
+        # self.pool = self.pool or Pool(4)
 
         # --------------------------------------------------------------------------------
         # Loop
         # --------------------------------------------------------------------------------
 
-        self.io_queue = self.pool.queue
-        self.pool.apply_async(target=io_loop, parameters=[self.io_lock, dir, log])
+        # self.io_queue = self.pool.queue
+        # self.pool.apply_async(target=io_loop, parameters=[self.io_lock, dir, log])
 
         self.metrics.time = Timer()
         while self.alive:

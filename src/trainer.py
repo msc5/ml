@@ -14,6 +14,7 @@ from rich.console import group as rgroup
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
+from rich.table import Column
 from rich.text import Text
 import torch
 import wandb
@@ -513,12 +514,12 @@ class OnlineTrainer (Trainer):
 
     def start(self):
         super().start()
-
         self.cols = ['Episode', 'Environment', 'Score', 'Reward', 'Returns', 'Steps', 'Status']
         self.tags = ['episode', 'environment', 'score', 'reward', 'returns', 'steps', 'status']
+        self.tables = []
 
-        self.history = []
-        self.table = Table(*self.cols, show_header=True, title='Results')
+        columns = (Column(col, ratio=1) for col in self.cols)
+        self.header = Table(*columns, show_header=True)
 
     @rgroup()
     def dashboard(self):
@@ -557,27 +558,23 @@ class OnlineTrainer (Trainer):
             data = dict(sorted(data.items(), key=lambda x: -x[1]['score']))
             return data
 
-        rows = []
+        columns = (Column(col, ratio=1) for col in self.cols)
+        table = Table(*columns, show_header=False)
         for run in ordered(cache).values():
             row = (f'{format(run[tag])}' for tag in self.tags)
-            rows.append(row)
+            table.add_row(*row, style='green' if run['status'] == 'alive' else 'red')
+        stats = f'[cyan]{cache["mean"]:3.3f} ± {cache["std"]:3.3f}'
+        table.add_section()
+        table.add_row(None, None, stats)
+        table.add_section()
 
-        stats = f'{cache["mean"]:3.3f} ± {cache["std"]:3.3f}'
+        self.tables = [table] + self.tables[:5]
 
-        self.history = [(rows, stats)] + self.history[:5]
-
+    @rgroup()
     def _render(self):
-
-        table = Table(*self.cols, show_header=True, title='Results')
-
-        for (rows, stats) in self.history:
-            for row in rows:
-                table.add_row(*row, style='red')
-            table.add_section()
-            table.add_row(None, None, stats)
-            table.add_section()
-
-        return table
+        yield self.header
+        for table in self.tables:
+            yield table
 
     def __rich__(self):
         return self._render()
