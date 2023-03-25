@@ -530,7 +530,7 @@ class Trainer (Module):
     @rgroup()
     def _render_online_results(self):
         tables = list(sorted(self._online_results, key=lambda x: -x[0]))
-        for _, table in tables[:6]:
+        for _, table in tables[:5]:
             yield table
 
 
