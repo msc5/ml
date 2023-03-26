@@ -529,6 +529,8 @@ class Trainer (Module):
 
     @rgroup()
     def _render_online_results(self):
+
+        # Sort results by mean score
         tables = list(sorted(self._online_results, key=lambda x: -x[0]))
         for _, table in tables[:5]:
             yield table
