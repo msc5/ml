@@ -6,6 +6,7 @@ from .src.module import *
 from .src.trainer import *
 from .src.util import *
 from .src.options import *
+from .src.dot import *
 from .src.cli import *
 from .src.mp import *
 

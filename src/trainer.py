@@ -24,7 +24,8 @@ from .data import OfflineDataset
 from .io import generate_name
 from .module import Module
 from .mp import Manager, Thread
-from .options import Dot, Options
+from .options import Options
+from .dot import Dot
 from .renderables import Alive, Table, check, section
 from .util import Fuzzy, Keyboard, Metadata, Ranges, Screens, Steps, System, Timer
 
@@ -523,7 +524,7 @@ class Trainer (Module):
         table.add_section()
         table.add_row(None, stats)
         table.add_section()
-        table = Panel(table, border_style='yellow', title=f'Run {len(self._online_results)}', title_align='left')
+        table = Panel(table, border_style='black', title=f'Run {len(self._online_results)}', title_align='left')
 
         self._online_results.append((cache['mean'], table))
 

@@ -9,8 +9,7 @@ from rich.progress import track
 from rich.table import Table
 import torch
 
-from ..options import Dot
-
+from ..dot import Dot
 from ..cli import console
 from ..util import ranges
 from ..data.d4rl import make_d4rl_dataset

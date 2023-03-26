@@ -8,7 +8,7 @@ from typing import Any, Optional
 from torch import nn
 
 from ..cli import console
-from .dot import Dot, DotItem
+from ..dot import Dot, DotItem
 
 
 class Options (Dot):

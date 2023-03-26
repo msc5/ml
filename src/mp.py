@@ -6,14 +6,13 @@ from typing import Callable, Iterable, Optional
 from rich import box
 from rich.columns import Columns
 from rich.console import Group, group
-from rich.panel import Panel
 import rich.progress as progress
 import torch.multiprocessing as mp
 import torch.multiprocessing.queue as tmpq
 
+from .dot import Dot
 from .cli import console
 from .io import generate_name
-from .options.dot import Dot
 from .renderables import Alive, Progress, Table
 
 COLUMN_WIDTH = 20

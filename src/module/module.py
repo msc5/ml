@@ -11,7 +11,8 @@ import torch
 import torch.nn as nn
 
 from ..cli import console
-from ..options import Dot, Options, OptionsModule
+from ..dot import Dot
+from ..options import Options, OptionsModule
 from ..renderables import Table
 
 

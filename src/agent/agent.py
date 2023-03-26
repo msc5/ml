@@ -17,8 +17,9 @@ from ..util import Metadata, Timer
 from .. import plots as pp
 from ..cli import console
 from ..data import OfflineDataset
-from ..mp import ManagedQueue, Pool, Thread
-from ..options import Dot, OptionsModule, Options
+from ..mp import ManagedQueue, Pool
+from ..options import OptionsModule, Options
+from ..dot import Dot
 from ..renderables import Table, section, check
 from .wrappers import Wrapper
 

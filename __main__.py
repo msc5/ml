@@ -1,4 +1,4 @@
-from .src.options import Dot
+from .src.dot import Dot
 from .src.cli import console
 
 import argparse
