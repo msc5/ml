@@ -5,15 +5,14 @@ from rich import box
 from rich.columns import Columns
 from rich.columns import Columns
 from rich.console import Group, group
-from rich.padding import Padding
 from rich.panel import Panel
 from rich.text import Text
 import torch
 import torch.nn as nn
 
-from .cli import console
-from .options import Dot, Options, OptionsModule
-from .renderables import Alive, Table
+from ..cli import console
+from ..options import Dot, Options, OptionsModule
+from ..renderables import Table
 
 
 def get_device(dev: Optional[str] = None):
@@ -38,6 +37,10 @@ class Module (OptionsModule, nn.Module):
     _hide_grads: bool = False
     _selected: bool = False
 
+    _commons: int
+    _uncommons: int
+    _is_common: bool
+
     _param_count: int = 0
     _out_grad_norm: Optional[float] = None
     _in_grad_norm: Optional[float] = None
@@ -53,7 +56,9 @@ class Module (OptionsModule, nn.Module):
         built = super()._build()
 
         # Check if module is common (Contains no children Modules)
-        self._is_common = sum([isinstance(c, Module) for c in self.children()]) == 0
+        self._commons = sum([not isinstance(c, Module) for c in self.children()])
+        self._uncommons = sum([isinstance(c, Module) for c in self.children()])
+        self._is_common = self._uncommons == 0
 
         # Register gradient hook
         super().register_full_backward_hook(self._grad_update_hook)
@@ -127,15 +132,6 @@ class Module (OptionsModule, nn.Module):
                 color = '[red]'
             msg += ' <- ' + color + f'𝝯 {self._out_grad_norm:5.2e}'
 
-        # if self._in_grad_norm is not None:
-        #     if self._in_grad_norm > high:
-        #         color = '[green]'
-        #     elif high > self._in_grad_norm > low:
-        #         color = '[yellow]'
-        #     else:
-        #         color = '[red]'
-        #     msg = color + f'𝝯 {self._out_grad_norm:5.2e}' + ' <- ' + msg
-
         yield msg
 
     @group()
@@ -148,11 +144,10 @@ class Module (OptionsModule, nn.Module):
             if isinstance(child, Module) and not child._hide_grads:
                 if child._is_common:
                     heading = Text(name, style='yellow')
-                    # selected = Alive(child._selected, true_label='selected')
                     table.add_row(heading, child._render_device(), child._render())
                 else:
-                    heading = Columns([Text(name, style='bold cyan'), child._render_params()])
-                    heading = Padding(heading, (0, 1))
+                    heading = [Text(name, style='bold cyan')]
+                    heading = Columns([*heading, child._render_params()], padding=(0, 2))
                     panel = Group(heading, child._render())
                     uncommons.append(panel)
 

@@ -108,7 +108,7 @@ class DotItem:
         return is_active
 
     def _row(self):
-        _key = f'[dot.key]{self.key}'
+        _key = f'[yellow]{self.key}'
         _value = self._format_value()
         _type = self._format_type()
         _active = Status('closed' if self._is_active() else 'open')
@@ -224,12 +224,12 @@ class Dot (object):
 
         if is_child:
             title = self._renderable or key
-            table = Table(title=title, title_style='dot.title', box=None,
+            table = Table(title=title, title_style='cyan', box=None,
                           padding=(0, 0, 0, 2), title_justify='left',
-                          show_header=False, style='dot.title', expand=True)
+                          show_header=False, style='cyan', expand=True)
         else:
             table = Table(title=None, title_style='white', box=box.ROUNDED,
-                          show_header=False, style='dot.border', expand=True)
+                          show_header=False, style='black', expand=True)
 
         items, dots = [], []
         items_order, dots_order = [], []
@@ -258,7 +258,7 @@ class Dot (object):
                 if self._renderable is not None:
                     return self._renderable
                 else:
-                    return Text(key, style='dot.title')
+                    return Text(key, style='cyan')
             else:
                 return table
         else:

@@ -5,14 +5,17 @@ import subprocess
 import sys
 
 import textual.app as app
+from textual.widget import Widget
 import textual.widgets as widgets
 
-from .cli import console
-from .options import Options
-from .trainer import Trainer
+from ..cli import console
+from ..options import Options
+from ..trainer import Trainer
 
 
-class Dashboard (widgets.Static):
+class Dashboard (Widget):
+
+    is_scrollable: bool = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -46,27 +49,31 @@ class Dashboard (widgets.Static):
 
     def render(self) -> app.RenderResult:
 
-        # return self._trainer.dashboard()
+        return self._trainer.dashboard()
         # return self._trainer.renderables.title()
-        return self._trainer.renderables.status()
+        # return self._trainer.renderables.status()
 
 
 class App (app.App):
 
-    BINDINGS = []
+    BINDINGS = [('q', 'quit', 'Quit')]
+    CSS_PATH = 'app.css'
+
+    is_scrollable: bool = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self._dashboard = Dashboard()
-        self._dashboard._trainer.train()
 
     def compose(self) -> app.ComposeResult:
 
         yield self._dashboard
 
-        yield widgets.Header()
-        yield widgets.Footer()
+        # yield widgets.Header()
+        # yield widgets.Footer()
+
+        self._dashboard._trainer.train()
 
 
 if __name__ == "__main__":
