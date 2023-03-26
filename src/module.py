@@ -162,7 +162,10 @@ class Module (OptionsModule, nn.Module):
         if has_commons and not has_uncommons:
             yield table
         elif not has_commons and has_uncommons:
-            yield Panel(Group(*uncommons), border_style='black')
+            if len(uncommons) == 1:
+                yield Group(*uncommons)
+            else:
+                yield Panel(Group(*uncommons), border_style='black')
         elif has_commons and has_uncommons:
             yield Panel(Group(table, *uncommons), border_style='black')
         else:
