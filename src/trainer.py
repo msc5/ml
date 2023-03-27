@@ -10,7 +10,7 @@ from typing import Any, Optional
 import git
 from humanize import naturalsize
 from rich import box
-from rich.console import group as rgroup
+from rich.console import Group, group as rgroup
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -110,7 +110,6 @@ class Trainer (Module):
 
     def _reset(self):
         self._loops = []
-        self.metrics = Dot()
         self.timer = Timer()
         self.progress = Steps(keys=['session', 'train', 'save', 'rollout'])
         self.system = System()
@@ -404,9 +403,7 @@ class Trainer (Module):
         @rgroup()
         def progress():
             yield dot('Threads', self.main_thread)
-            yield ''
             yield dot('Progress', self.progress)
-            yield ''
             yield dot('System', self.system)
 
         self.renderables = Dot(title=title, info=info, system=system,
@@ -444,11 +441,13 @@ class Trainer (Module):
             Layout(name='status'),
             Layout(name='agent', visible=False))
 
+        metrics = Group(self.renderables.dot('Metrics', self.metrics), self.renderables.dot('Ranges', self.ranges))
+
         layout['title']['run'].update(self.renderables.title())
         layout['title']['info'].update(self.renderables.info())
         layout['title']['system'].update(self.renderables.system())
         layout['content']['meta']['status'].update(self.renderables.status())
-        layout['content']['metrics'].update(self.renderables.dot('Metrics', self.metrics))
+        layout['content']['metrics'].update(metrics)
         layout['content']['progress'].update(self.renderables.progress())
         self.layout = layout
 
@@ -456,7 +455,7 @@ class Trainer (Module):
             self.layout['content']['metrics'].split_row(
                 Layout(name='met'),
                 Layout(name='agent'))
-            self.layout['content']['metrics']['met'].update(self.renderables.dot('Metrics', self.metrics))
+            self.layout['content']['metrics']['met'].update(metrics)
             self.layout['content']['metrics']['agent'].update(
                 self.renderables.dot('Results', self._render_online_results()))
 

@@ -52,6 +52,7 @@ class Module (OptionsModule, nn.Module):
         super(Module, self).__init__(opts)
 
         self.metrics = Dot()
+        self.ranges = Dot()
 
     def _build(self):
         built = super()._build()
@@ -71,6 +72,7 @@ class Module (OptionsModule, nn.Module):
         for name, child in self.named_children():
             if isinstance(child, Module):
                 self.metrics[name] = child.metrics
+                self.ranges[name] = child.ranges
 
         return built
 

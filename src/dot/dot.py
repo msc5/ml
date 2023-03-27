@@ -1,6 +1,7 @@
 from __future__ import annotations
 from copy import deepcopy
 from typing import Callable, Optional
+from rich.columns import Columns
 
 from rich.console import Group
 from rich.padding import Padding
@@ -18,14 +19,11 @@ class Dot (object):
     dictionary or dot notation.
     """
 
-    _size: int = 0
-
     _name: Optional[str] = None
     _parent: Optional[Dot] = None
 
     def __init__(self, *args, **kwargs):
         super().__init__()
-        object.__setattr__(self, '_size', 0)
         self._update(*args, **kwargs)
 
     def _update(self, *args, **kwargs):
@@ -89,20 +87,20 @@ class Dot (object):
         return obj
 
     def _dfs(self,
-             preorder: Optional[Callback],
-             inorder: Optional[Callback],
-             postorder: Optional[Callback],
+             preorder: Optional[Callback] = None,
+             inorder: Optional[Callback] = None,
+             postorder: Optional[Callback] = None,
              data: dict = {}):
         """
         Performs Depth-First Search starting from self.
         """
 
-        if preorder is not None: preorder(data)
+        if preorder is not None: preorder(self, data)
         for (_, v) in self._items():
             if isinstance(v, Dot):
-                if inorder is not None: inorder(data)
+                if inorder is not None: inorder(self, data)
                 v.dfs(v, preorder=preorder, postorder=postorder)
-        if postorder is not None: postorder(data)
+        if postorder is not None: postorder(self, data)
 
     def __call__(self, *args, **kwargs):
         map = deepcopy(self)
@@ -130,7 +128,13 @@ class Dot (object):
         return key in vars(self)
 
     def __len__(self):
-        return self._size
+        count = 0
+        for _, child in self._items():
+            if isinstance(child, Dot):
+                count += len(child)
+            elif isinstance(child, DotItem):
+                count += 1
+        return count
 
     # -------------------- Rendering -------------------- #
 
@@ -145,8 +149,9 @@ class Dot (object):
         for (k, v) in sorted(self._items()):
 
             if isinstance(v, Dot) and len(v) > 0:
-                title = Text(k, style='bold blue')
-                dots += [Group(title, Padding(v._render(k), (0, 2)))]
+                r = [Columns([Text(k, style='bold blue'), Text(f'({len(v)})', style='magenta')], padding=(0, 2))]
+                r += [Padding(v._render(k), (0, 2))]
+                dots += [Group(*r)]
 
             elif isinstance(v, DotItem):
                 table.add_row(*v._row())
@@ -214,11 +219,9 @@ class Dot (object):
             v = value
             if v._parent == None:
                 object.__setattr__(v, '_parent', self)
-            object.__setattr__(self, '_size', self._size + v._size)
         else:
             v = DotItem(key, value)
         object.__setattr__(self, key, v)
-        object.__setattr__(self, '_size', self._size + 1)
 
     # -------------------- Get Methods -------------------- #
 
@@ -236,7 +239,7 @@ class Dot (object):
         return v
 
 
-Callback = Callable[[dict], None]
+Callback = Callable[[Dot, dict], None]
 
 
 if __name__ == "__main__":
