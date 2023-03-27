@@ -56,7 +56,7 @@ class Actor:
         return None
 
 
-def io_loop(queues: dict[str, ManagedQueue], io_lock: Any, dir: str, log: bool = False):
+def io_loop(queues: dict[str, ManagedQueue], io_lock: Any, log: bool = False):
 
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
@@ -66,6 +66,7 @@ def io_loop(queues: dict[str, ManagedQueue], io_lock: Any, dir: str, log: bool =
         if env is None and cache is None:
             return
 
+        dir = cache['dir']
         if not os.path.exists(dir):
             os.makedirs(dir)
 
@@ -152,7 +153,6 @@ class Agent (OptionsModule):
     noise_min: float = 0.0
     noise_steps: int = 100000
 
-    rollout: int = 500
     log: bool = False
 
     alive: dict = {}
@@ -354,19 +354,19 @@ class Agent (OptionsModule):
             wandb.log({'performance': table})
 
     def save(self, env: int):
-        # cache = {}
-        # for key, val in self.cache[env].items():
-        #     if isinstance(val, list) and len(val) != 0:
-        #         if isinstance(val[0], torch.Tensor):
-        #             cache[key] = torch.stack(val)
-        #         else:
-        #             cache[key] = torch.tensor(val)
-        #     elif isinstance(val, torch.Tensor):
-        #         cache[key] = val.clone()
-        #     else:
-        #         cache[key] = val
-        # self.io_queue.queues['in'].put((env, cache))
-        pass
+        cache = {}
+        for key, val in self.cache[env].items():
+            if isinstance(val, list) and len(val) != 0:
+                if isinstance(val[0], torch.Tensor):
+                    cache[key] = torch.stack(val)
+                else:
+                    cache[key] = torch.tensor(val)
+            elif isinstance(val, torch.Tensor):
+                cache[key] = val.clone()
+            else:
+                cache[key] = val
+        cache['dir'] = self.dir
+        self.io_queue.queues['in'].put((env, cache))
 
     def episode_reassign(self, env: int, **kwargs):
         if self.queue:
@@ -437,7 +437,7 @@ class Agent (OptionsModule):
         # --------------------------------------------------------------------------------
 
         episodes = episodes or self.max_episodes
-        dir = dir or self.dir
+        self.dir = dir or self.dir
 
         for env in self.envs:
             self.reset(env)
@@ -452,15 +452,15 @@ class Agent (OptionsModule):
         for env in range(self.parallel):
             self.episode_reassign(env)
 
-        # # Initialize pool only once
-        # self.pool = self.pool or Pool(4)
+        # Initialize pool only once
+        if self.pool is None:
+            self.pool = Pool(4)
+            self.io_queue = self.pool.queue
+            self.pool.apply_async(target=io_loop, parameters=[self.io_lock, log])
 
         # --------------------------------------------------------------------------------
         # Loop
         # --------------------------------------------------------------------------------
-
-        # self.io_queue = self.pool.queue
-        # self.pool.apply_async(target=io_loop, parameters=[self.io_lock, dir, log])
 
         self.metrics.time = Timer()
         while self.alive:
@@ -477,11 +477,6 @@ class Agent (OptionsModule):
 
             self.steps.total += 1
 
-            for env in list(self.alive):
-                steps = self.steps[env].step
-                if steps != 0 and (steps in [1, 20, 50] or steps % self.rollout == 0):
-                    self.save(env)
-
             if stop is not None and stop.is_set():
                 for env in list(self.alive):
                     self.save(env)
@@ -492,12 +487,14 @@ class Agent (OptionsModule):
 
     def close(self):
         section('Exiting', module='Agent', color='yellow')
+
         for wrapper in self.envs.values():
             wrapper.close()
         check('Wrappers closed', color='yellow')
-        # if self.log:
-        #     self.log_table(self.dead)
-        #     self.log_performance(self.dead)
-        #     check('Final results logged', color='yellow')
+
+        if self.pool is not None:
+            self.pool.close()
+            check('Pool closed', color='yellow')
+
         check('Finished', color='yellow')
         console.print()

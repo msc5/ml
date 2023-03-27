@@ -103,11 +103,11 @@ Manager.register('Dot', Dot, exposed=['__setitem__', '__getitem__', '__call__', 
 
 
 @group()
-def _render_children(children: dict):
+def _render_children(children: dict, **kwargs):
     table = Table(box=box.ROUNDED, style='black')
     for child in children.values():
         if hasattr(child, '_render'):
-            table.add_row(child._render())
+            table.add_row(child._render(**kwargs))
     yield table
 
 
@@ -146,7 +146,7 @@ class Thread (threading.Thread):
         return result
 
     @group()
-    def _render(self):
+    def _render(self, **_):
 
         if self._is_main:
             yield _render_children(self.children)
@@ -199,7 +199,7 @@ class Queue:
                              'out': Progress(['size'], total=maxsize, columns=columns)})
 
     @group()
-    def _render(self):
+    def _render(self, **_):
 
         table = Table(style='black', box=box.ROUNDED, expand=False)
 
@@ -272,7 +272,7 @@ class Process:
         self.alive.stopped()
 
     @group()
-    def _render(self):
+    def _render(self, render_queue: bool = True, **_):
 
         title = [f'[bold blue]Process[reset]', f'[blue]{self.name}[reset]']
         if self.target is not None:
@@ -283,7 +283,9 @@ class Process:
         if self.children:
             render = Group(render, _render_children(self.children))
         yield render
-        yield self.queue
+
+        if render_queue:
+            yield self.queue
 
     def __rich__(self):
         return self._render()
@@ -329,15 +331,14 @@ class Pool:
             del self.children[process.name]
 
     @group()
-    def _render(self):
-
-        title = [f'[green]{self.name}']
-        cols = Columns(title)
-        yield cols
+    def _render(self, **_):
+        title = [f'[bold green]Pool[reset]', f'[green]({self.size})', f'[blue]{self.name}[reset]']
+        render = Columns([*title], padding=(0, 3))
+        yield render
         yield self.queue
 
         if self.children:
-            yield _render_children(self.children)
+            yield _render_children(self.children, render_queue=False)
 
     def __rich__(self):
         return self._render()
