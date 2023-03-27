@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, Union
 
 from rich import box
 from rich.columns import Columns
@@ -48,8 +48,11 @@ class Module (OptionsModule, nn.Module):
 
     device: torch.device = get_device()
 
-    def __init__(self, opts: Optional[Options] = None):
-        super(Module, self).__init__(opts)
+    def __init__(self, opts: Optional[Union[Options, dict]] = None):
+        if isinstance(opts, dict) and opts is not None:
+            super(Module, self).__init__(Options(opts))
+        else:
+            super(Module, self).__init__(opts)
 
         self.metrics = Dot()
         self.ranges = Dot()
