@@ -10,6 +10,7 @@ from typing import Any, Optional
 import git
 from humanize import naturalsize
 from rich import box
+from rich.columns import Columns
 from rich.console import Group, group as rgroup
 from rich.layout import Layout
 from rich.live import Live
@@ -364,24 +365,34 @@ class Trainer (Module):
 
         @rgroup()
         def info():
-            table = Table(box=None)
+            infos = []
 
             if self.note != '':
-                note = Text(self.note, style='yellow')
-                table.add_row('Note', note)
+                note = Group('Note', Text(self.note, style='yellow'))
+                infos.append(note)
 
             # Github
-            branch = Text('Branch: ') + Text(self.github.branch, style='magenta')
-            commit = Text('Commit: ') + Text('\"' + self.github.commit + '\"', style='green')
-            table.add_row('Github', branch, commit)
+            if self.github is not None:
+                branch = Text('Branch: ') + Text(self.github.branch, style='magenta')
+                commit = Text('Commit: ') + Text('\"' + self.github.commit + '\"', style='green')
+                github = Group('Github', branch, commit)
+                infos.append(github)
 
-            # Wandb and Slurm
-            wandb_id = Text(self.run.id, style='magenta') if self.run is not None else empty
-            slurm_id = Text(self.slurm_id, style='magenta') if self.slurm_id != '' else empty
-            table.add_row('Wandb', Text('ID: ') + wandb_id, Alive(self.run is not None))
-            table.add_row('Slurm', Text('ID: ') + slurm_id, Alive(self.slurm_id != ''))
+            # Wandb
+            if self.run is not None:
+                wandb_id = Text(self.run.id, style='magenta') if self.run is not None else empty
+                wandb = Group('Wanbd', Text('ID: ') + wandb_id)
+                infos.append(wandb)
 
-            yield Panel(table, border_style='black')
+            # Slurm
+            if self.slurm_id is not None:
+                slurm_id = Text(self.slurm_id, style='magenta') if self.slurm_id != '' else empty
+                slurm = Group('Slurm', Text('ID: ') + slurm_id)
+                infos.append(slurm)
+
+            infos = [Panel(info, border_style='black', width=20, height=9) for info in infos]
+
+            yield Columns(infos, padding=(0, 0))
 
         @rgroup()
         def system():
@@ -433,12 +444,12 @@ class Trainer (Module):
         # Layout
         layout = Layout()
         layout.split_column(
-            Layout(name='title', size=7),
+            Layout(name='title', size=9),
             Layout(name='content'))
         layout['title'].split_row(
-            Layout(name='run'),
-            Layout(name='info'),
-            Layout(name='system'))
+            Layout(name='run', ratio=2),
+            Layout(name='info', ratio=5))
+        # Layout(name='system'))
         layout['content'].split_row(
             Layout(name='meta', ratio=2),
             Layout(name='metrics', ratio=3),
@@ -451,7 +462,7 @@ class Trainer (Module):
 
         layout['title']['run'].update(self.renderables.title())
         layout['title']['info'].update(self.renderables.info())
-        layout['title']['system'].update(self.renderables.system())
+        # layout['title']['system'].update(self.renderables.system())
         layout['content']['meta']['status'].update(self.renderables.status())
         layout['content']['metrics'].update(metrics)
         layout['content']['progress'].update(self.renderables.progress())
