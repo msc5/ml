@@ -163,11 +163,6 @@ class Agent (OptionsModule):
 
     buffer: OfflineDataset
 
-    def pre(self, o: Options):
-        self.environment = o.env
-        o.env = None
-        o.buffer = Options(env=None)
-
     def _build(self):
         section('Building', module='Agent', color='yellow')
         return super()._build()

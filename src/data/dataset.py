@@ -25,7 +25,7 @@ class OfflineDataset (OptionsModule):
 
     stats: dict
 
-    env: Optional[str] = None
+    environment: Optional[str] = None
     discount: float = 0.99
     terminal_penalty: float = -10.0
     max_length: int = 1000
@@ -33,7 +33,7 @@ class OfflineDataset (OptionsModule):
     capacity: Optional[int] = None
 
     def _build(self):
-        if self.env is not None:
+        if self.environment is not None:
             section('Building', module='Dataset', color='green')
         return super()._build()
 
@@ -45,8 +45,8 @@ class OfflineDataset (OptionsModule):
         self.data = {key: torch.empty(0) for key in ['X', 'A', 'R', 'T', 'V']}
         self.stats = {key: torch.empty(0) for key in ['X', 'A', 'R', 'T', 'V']}
 
-        if self.env is not None:
-            self.load(self.env)
+        if self.environment is not None:
+            self.load(self.environment)
 
     def save(self, data: dict, env: str):
         path = os.path.join('datasets', env)
@@ -478,7 +478,7 @@ class OfflineDataset (OptionsModule):
     def table(self):
 
         title = f'Dataset'
-        if self.env is not None: title += f' [reset]([yellow]{self.env}[reset])'
+        if self.environment is not None: title += f' [reset]([yellow]{self.environment}[reset])'
         table = Table(title=title, show_header=False, expand=True, box=box.ROUNDED, style='blue')
         table.add_row('Episodes', str(len(self._episodes)))
         table.add_row('Lengths', str(ranges(torch.tensor(self._lengths))))
