@@ -57,6 +57,7 @@ class Trainer (Module):
     wandb_resume: bool = False
     retrain: list[str] = []
     override_opts: bool = False
+    note: str = ''
 
     # Instance variables
     metrics: Dot
@@ -331,7 +332,8 @@ class Trainer (Module):
                     key = f'{model.__class__.__name__}{key}'
                     if isinstance(val.value, Number):
                         log[key] = val.value
-                    elif isinstance(val.value, Ranges):
+                for key, val in model.ranges:
+                    if isinstance(val.value, Ranges):
                         log[f'{key}.min'] = val.value._min
                         log[f'{key}.max'] = val.value._max
                         log[f'{key}.mean'] = val.value._mean
@@ -363,6 +365,10 @@ class Trainer (Module):
         @rgroup()
         def info():
             table = Table(box=None)
+
+            if self.note != '':
+                note = Text(self.note, style='yellow')
+                table.add_row('Note', note)
 
             # Github
             branch = Text('Branch: ') + Text(self.github.branch, style='magenta')
