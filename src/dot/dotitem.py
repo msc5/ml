@@ -39,21 +39,24 @@ class DotItem:
         else:
             v = self.value
             if self.value is None:
-                v = ''
+                v = f'[red]None'
             elif isinstance(self.value, str):
-                v = f'\'{self.value}\''
+                v = f'[green]\'{self.value}\''
             elif isinstance(self.value, float):
-                v = f'{self.value:5.5f}'
+                v = f'[blue]{self.value:5.5f}'
+            elif isinstance(self.value, int):
+                v = f'[italic blue]{self.value:,}'
             elif isinstance(self.value, torch.Tensor):
                 if len(self.value.shape) == 0:
-                    v = self.value.item()
+                    v = f'[yellow]{self.value.item()}'
                 else:
-                    v = self.value.shape
+                    v = f'[yellow]{self.value.shape}'
             elif isinstance(self.value, torch.nn.Module):
-                v = self.value.__class__.__name__
+                v = f'[bold blue]{self.value.__class__.__name__}'
             elif isclass(self.value):
-                v = f'{self.value.__name__}'
-            v = f'[green]{v}'
+                v = f'[bold blue]{self.value.__name__}'
+            # v = f'[green]{v}'
+            v = str(v)
         return v
 
     def _format_type(self):

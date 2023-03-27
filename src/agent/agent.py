@@ -16,9 +16,8 @@ from ..util import Metadata, Timer
 
 from .. import plots as pp
 from ..cli import console
-from ..data import OfflineDataset
 from ..mp import ManagedQueue, Pool
-from ..options import OptionsModule, Options
+from ..options import OptionsModule
 from ..dot import Dot
 from ..renderables import Table, section, check
 from .wrappers import Wrapper
@@ -160,13 +159,6 @@ class Agent (OptionsModule):
     cache: dict = {}
 
     pool: Optional[Pool] = None
-
-    buffer: OfflineDataset
-
-    def pre(self, o: Options):
-        self.environment = o.env
-        o.env = None
-        o.buffer = Options(env=None)
 
     def _build(self):
         section('Building', module='Agent', color='yellow')

@@ -421,7 +421,8 @@ class Trainer (Module):
         def progress():
             yield dot('Threads', self.main_thread)
             yield dot('Progress', self.progress)
-            yield dot('System', self.system)
+            # yield dot('System', self.system)
+            yield dot('Options', self.opts)
 
         self.renderables = Dot(title=title, info=info, system=system,
                                dot=dot, progress=progress, status=status)
