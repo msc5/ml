@@ -237,14 +237,14 @@ class OfflineDataset (OptionsModule):
 
     def unnormalize(self, x: torch.Tensor, key: Optional[str] = None):
         """
-        Unnormalizes each dimension of input tensor x to [-1, 1] using min and
-        max values.
+        Unnormalizes each dimension of input tensor x from [-1, 1] using min
+        and max values.
         Inputs / Outputs:
             x:  [ *, size ]
         """
         if key is not None and key in self.stats:
             high, low = self.stats[key]['high'], self.stats[key]['low']
-            unnormalized = (x.clamp(-1.0, 1.0).flatten(0, -2) + 1) / 2.
+            unnormalized = (x.flatten(0, -2) + 1) / 2.
             unnormalized = unnormalized * (high.to(x.device) - low.to(x.device)) + low.to(x.device)
             unnormalized = unnormalized.reshape(x.shape).to(torch.float32)
             return unnormalized
