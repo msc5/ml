@@ -1,4 +1,5 @@
 from __future__ import annotations
+from abc import abstractmethod
 from typing import Optional, Union
 
 from rich import box
@@ -77,6 +78,9 @@ class Module (OptionsModule, nn.Module):
                 self.metrics[name] = child.metrics
                 self.ranges[name] = child.ranges
 
+        # Initialize optimizers
+        self.optimizers = Dot(self.init_optimizers())
+
         return built
 
     def _grad_update_hook(self, module: nn.Module, in_grad, out_grad):
@@ -94,7 +98,13 @@ class Module (OptionsModule, nn.Module):
             else:
                 self._in_grad_norm = None
 
-    # ---------------------------------------- Public Methods ---------------------------------------- #
+    # -------------------- Abstract Methods -------------------- #
+
+    @abstractmethod
+    def init_optimizers(self):
+        return iter(())
+
+    # -------------------- Public Methods -------------------- #
 
     def select(self):
 
@@ -114,7 +124,7 @@ class Module (OptionsModule, nn.Module):
             updated_param = p * learner_param.data + (1.0 - p) * target_param.data
             target_param.data.copy_(updated_param)
 
-    # ---------------------------------------- Rendering ---------------------------------------- #
+    # --------------------  Rendering --------------------  #
 
     @group()
     def _render_device(self):
