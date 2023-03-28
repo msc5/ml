@@ -3,7 +3,7 @@ import abc
 import argparse
 from inspect import isclass
 import sys
-from typing import Any, Optional
+from typing import Any, Optional, get_origin
 
 from torch import nn
 
@@ -17,6 +17,16 @@ class Options (Dot):
 
 class OptionsItem (DotItem):
     pass
+
+
+def is_primitive(v: type):
+
+    if v in (int, float, str, bool):
+        return True
+    if get_origin(v) in (list, tuple):
+        return True
+
+    return False
 
 
 class OptionsModule:
@@ -91,7 +101,7 @@ class OptionsModule:
 
         for (k, v) in cls._get_annotations().items():
             if k[0] != '_' and not k in opts:
-                if v in [int, float, str, bool, list]:
+                if is_primitive(v):
                     attr = getattr(cls, k, None)
                     if attr is not None:
                         opts[k] = attr
@@ -180,7 +190,8 @@ class OptionsModule:
             if key[0] != '_':
                 if isinstance(val, OptionsModule):
                     params[key] = val._gather_params()
-                elif type(val) in [bool, int, float, str, list]:
+                # elif type(val) in PRIMITIVES:
+                elif is_primitive(type(val)):
                     params[key] = val
         return params
 
