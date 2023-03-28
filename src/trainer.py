@@ -328,15 +328,19 @@ class Trainer (Module):
         if self.log:
             log = {}
             for model in self._selected:
+
                 for key, val in model.metrics:
-                    key = f'{model.__class__.__name__}{key}'
+                    key = f'{self.group}-{model.__class__.__name__}{key}'
                     if isinstance(val.value, Number):
                         log[key] = val.value
+
                 for key, val in model.ranges:
+                    key = f'{self.group}-{model.__class__.__name__}{key}'
                     if isinstance(val.value, Ranges):
                         log[f'{key}.min'] = val.value._min
                         log[f'{key}.max'] = val.value._max
                         log[f'{key}.mean'] = val.value._mean
+
             step = self.progress.get('train') if self.wandb_resume else self.progress.get('session')
             wandb.log(log, step=step)
             self._logged.update(Dot(log))
