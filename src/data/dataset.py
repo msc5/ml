@@ -244,7 +244,7 @@ class OfflineDataset (OptionsModule):
         """
         if key is not None:
             high, low = self.stats[key]['high'], self.stats[key]['low']
-            unnormalized = (x.flatten(0, -2) + 1) / 2.
+            unnormalized = (x.clamp(-1.0, 1.0).flatten(0, -2) + 1) / 2.
             unnormalized = unnormalized * (high.to(x.device) - low.to(x.device)) + low.to(x.device)
             unnormalized = unnormalized.reshape(x.shape).to(torch.float32)
             return unnormalized
