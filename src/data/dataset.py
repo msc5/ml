@@ -226,7 +226,7 @@ class OfflineDataset (OptionsModule):
         Inputs / Outputs:
             x:  [ *, size ]
         """
-        if key is not None:
+        if key is not None and key in self.stats:
             high, low = self.stats[key]['high'], self.stats[key]['low']
             normalized = (x.flatten(0, -2) - low.to(x.device)) / (high.to(x.device) - low.to(x.device))
             normalized = 2 * normalized - 1
@@ -242,7 +242,7 @@ class OfflineDataset (OptionsModule):
         Inputs / Outputs:
             x:  [ *, size ]
         """
-        if key is not None:
+        if key is not None and key in self.stats:
             high, low = self.stats[key]['high'], self.stats[key]['low']
             unnormalized = (x.clamp(-1.0, 1.0).flatten(0, -2) + 1) / 2.
             unnormalized = unnormalized * (high.to(x.device) - low.to(x.device)) + low.to(x.device)
