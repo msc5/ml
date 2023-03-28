@@ -420,7 +420,6 @@ class Trainer (Module):
         screen_args = {'refresh_per_second': 8, 'screen': True, 'console': console}
         screens = {'live': Live(get_renderable=self.dashboard, **screen_args),
                    'opts': Live(self.opts, **screen_args),
-                   'dataset': Live(self.dataset.table(), **screen_args),
                    'logged': Live(self._logged, **screen_args),
                    'config': Fuzzy(console, config)}
         if self.online_eval:
