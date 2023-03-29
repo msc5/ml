@@ -244,10 +244,39 @@ class OfflineDataset (OptionsModule):
         """
         if key is not None and key in self.stats:
             high, low = self.stats[key]['high'], self.stats[key]['low']
-            unnormalized = (x.flatten(0, -2) + 1) / 2.
+            unnormalized = (x.clamp(-1.0, 1.0).flatten(0, -2) + 1) / 2.
             unnormalized = unnormalized * (high.to(x.device) - low.to(x.device)) + low.to(x.device)
             unnormalized = unnormalized.reshape(x.shape).to(torch.float32)
             return unnormalized
+        else:
+            return x
+
+    def standardize(self, x: torch.Tensor, key: Optional[str], **_):
+        """
+        Standardizes each dimension of input tensor x to 0 mean and 1 variance.
+        Inputs / Outputs:
+            x:  [ *, size ]
+        """
+        if key is not None and key in self.stats:
+            mean, var = self.stats[key]['mean'].to(x.device), self.stats[key]['var'].to(x.device)
+            standardized = (x.flatten(0, -2) - mean[None]) / var[None]
+            standardized = standardized.reshape(x.shape)
+            standardized = standardized.to(torch.float32)
+            return standardized
+        else:
+            return x
+
+    def unstandardize(self, x: torch.Tensor, key: Optional[str], **_):
+        """
+        Unstandardizes each dimension of input tensor x using mean and variance.
+        Inputs / Outputs:
+            x:  [ *, size ]
+        """
+        if key is not None and key in self.stats:
+            mean, var = self.stats[key]['mean'].to(x.device), self.stats[key]['var'].to(x.device)
+            unstandardized = (x.flatten(0, -2) * var[None].to(x.device)) + mean.to(x.device)[None]
+            unstandardized = unstandardized.reshape(x.shape)
+            return unstandardized
         else:
             return x
 
