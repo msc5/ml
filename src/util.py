@@ -47,36 +47,6 @@ def makedir(path: str):
     if not os.path.exists(path): os.makedirs(path)
 
 
-def pos_embed(x: torch.Tensor, max_len: int = 1000, seq_dim: int = -2, size_dim: int = -1):
-    """
-    Inputs:
-        x: [ *, seq, size ]
-    """
-
-    seq_len = x.shape[seq_dim]
-    size = x.shape[size_dim]
-
-    # x : [ batch, seq_len (t), size (i) ]
-    t = torch.arange(0, seq_len, device=x.device)
-    i = torch.arange(0, size, device=x.device)
-    k = i.div(2, rounding_mode='floor')
-
-    evens = (i % 2) == 0
-    odds = ~evens
-    w = 1 / (max_len**(2 * k / size))
-
-    p = torch.zeros(seq_len, size, device=x.device)
-    p[:, evens] = (w[None, evens] * t[:, None]).sin()
-    p[:, odds] = (w[None, odds] * t[:, None]).cos()
-
-    shape = [1] * len(x.shape)
-    shape[seq_dim], shape[size_dim] = seq_len, size
-    p = p.reshape(*shape)
-    p = p.expand(*x.shape)
-
-    return p
-
-
 @cl.contextmanager
 def quiet():
     with open(os.devnull, 'w') as null:
