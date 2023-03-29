@@ -109,7 +109,7 @@ class Ranges:
 
     def __rich__(self):
         ranges = Text.from_markup(f'[[green]{self._min:.2f}[/green], [green]{self._max:.2f}[/green]]')
-        normal = Text.from_markup(f'[[blue]{self._mean:.2f}[/blue], [blue]{self._std:.2f}[/blue]]')
+        normal = Text.from_markup(f'([blue]{self._mean:.2f}[/blue], [blue]{self._std:.2f}[/blue])')
         return ranges + ' ~ ' + normal
 
 

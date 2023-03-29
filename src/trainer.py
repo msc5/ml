@@ -340,6 +340,7 @@ class Trainer (Module):
                         log[f'{key}.min'] = val.value._min
                         log[f'{key}.max'] = val.value._max
                         log[f'{key}.mean'] = val.value._mean
+                        log[f'{key}.std'] = val.value._std
 
             step = self.progress.get('train') if self.wandb_resume else self.progress.get('session')
             wandb.log(log, step=step)
