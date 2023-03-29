@@ -211,12 +211,12 @@ class OfflineDataset (OptionsModule):
 
         # Compute Moments
         if x.is_floating_point():
-            mean, var = x.mean(0), x.var(0)
+            mean, std = x.mean(0), x.std(0)
         else:
-            mean, var = None, None
+            mean, std = None, None
 
         return {'high': high, 'low': low,
-                'mean': mean, 'var': var,
+                'mean': mean, 'std': std,
                 'shape': shape, 'type': type}
 
     def normalize(self, x: torch.Tensor, key: Optional[str] = None):
@@ -253,13 +253,13 @@ class OfflineDataset (OptionsModule):
 
     def standardize(self, x: torch.Tensor, key: Optional[str], **_):
         """
-        Standardizes each dimension of input tensor x to 0 mean and 1 variance.
+        Standardizes each dimension of input tensor x to 0 mean and 1 std.
         Inputs / Outputs:
             x:  [ *, size ]
         """
         if key is not None and key in self.stats:
-            mean, var = self.stats[key]['mean'].to(x.device), self.stats[key]['var'].to(x.device)
-            standardized = (x.flatten(0, -2) - mean[None]) / var[None]
+            mean, std = self.stats[key]['mean'].to(x.device), self.stats[key]['std'].to(x.device)
+            standardized = (x.flatten(0, -2) - mean[None]) / std[None]
             standardized = standardized.reshape(x.shape)
             standardized = standardized.to(torch.float32)
             return standardized
@@ -268,13 +268,13 @@ class OfflineDataset (OptionsModule):
 
     def unstandardize(self, x: torch.Tensor, key: Optional[str], **_):
         """
-        Unstandardizes each dimension of input tensor x using mean and variance.
+        Unstandardizes each dimension of input tensor x from 0 mean and 1 std.
         Inputs / Outputs:
             x:  [ *, size ]
         """
         if key is not None and key in self.stats:
-            mean, var = self.stats[key]['mean'].to(x.device), self.stats[key]['var'].to(x.device)
-            unstandardized = (x.flatten(0, -2) * var[None].to(x.device)) + mean.to(x.device)[None]
+            mean, std = self.stats[key]['mean'].to(x.device), self.stats[key]['std'].to(x.device)
+            unstandardized = (x.flatten(0, -2) * std[None].to(x.device)) + mean.to(x.device)[None]
             unstandardized = unstandardized.reshape(x.shape)
             return unstandardized
         else:
