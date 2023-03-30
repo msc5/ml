@@ -128,8 +128,6 @@ class OfflineDataset (OptionsModule):
             raw['stats'] = self.stats
             save = True
 
-        breakpoint()
-
         if save: self.save(raw, env)
 
     def split(self, terminals: torch.Tensor):
