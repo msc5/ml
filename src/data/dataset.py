@@ -22,7 +22,7 @@ class OfflineDataset (OptionsModule):
 
     environment: Optional[str] = None
     discount: float = 0.99
-    terminal_penalty: float = -10.0
+    terminal_penalty: float = -100.0
     max_length: int = 1000
 
     capacity: Optional[int] = None
@@ -77,12 +77,15 @@ class OfflineDataset (OptionsModule):
         A = raw['actions']
         if len(A.shape) == 1:
             A = A[:, None]
-        R = raw['rewards'][:, None]
 
         # Episode delimiters
         D = raw['terminals'][:, None]
         if 'timeouts' in raw:
             D += raw['timeouts'][:, None]
+
+        # Set termination penalty
+        R = raw['rewards'][:, None]
+        R[raw['terminals'][:, None]] = self.terminal_penalty
 
         assert len(X) == len(A) == len(R) == len(D)
 
@@ -123,6 +126,8 @@ class OfflineDataset (OptionsModule):
                     self.stats[key] = self.compute_stats(val)
             raw['stats'] = self.stats
             save = True
+
+        breakpoint()
 
         if save: self.save(raw, env)
 

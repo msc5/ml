@@ -138,6 +138,7 @@ class Agent (OptionsModule):
 
     data: dict[str, torch.Tensor]
 
+    # TODO: These should come from wrappers
     x_size: int
     a_size: int
 
