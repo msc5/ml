@@ -185,8 +185,8 @@ class Module (OptionsModule, nn.Module):
     def __rich__(self):
         return self._render()
 
-    def __str__(self) -> str:
-        return self.__class__.__name__
+    # def __str__(self) -> str:
+    #     return self.__class__.__name__
 
-    def __repr__(self) -> str:
-        return self.__class__.__name__
+    # def __repr__(self) -> str:
+    #     return self.__class__.__name__
