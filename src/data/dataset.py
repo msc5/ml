@@ -85,7 +85,8 @@ class OfflineDataset (OptionsModule):
 
         # Set termination penalty
         R = raw['rewards'][:, None]
-        R[raw['terminals'][:, None]] = self.terminal_penalty
+        penalty_timesteps = raw['terminals'].logical_and(~raw['timeouts'])
+        R[penalty_timesteps] = self.terminal_penalty
 
         assert len(X) == len(A) == len(R) == len(D)
 
