@@ -56,7 +56,6 @@ class Trainer (Module):
     wandb_group: str = ''
     wandb_resume: bool = False
     retrain: list[str] = []
-    override_opts: bool = False
     note: str = ''
 
     # Instance variables
@@ -134,7 +133,7 @@ class Trainer (Module):
 
     def start(self):
         """
-        Begins training loop.
+        Initializes module for training loop.
         """
 
         self._reset()
@@ -146,22 +145,6 @@ class Trainer (Module):
         self.manager.start()
         self.exit_event = self.manager.Event()
 
-        # Load previous model options
-        if self.load_model != '':
-            with Metadata(self.load_model) as meta:
-                config = Options(meta.data['config'])
-                config = config(self.parse())
-                # progress = Dot(meta.data['progress'])
-                # progress.session = 0
-                wandb_id = meta.data.get('wandb', '')
-                sys = self.opts.sys
-            if self.override_opts:
-                self.apply_opts(config)
-                self.opts.sys = sys
-            self.wandb_id = wandb_id
-            # self.progress = progress
-            check('Loaded Model Configuration')
-
         # Metadata
         with Metadata(self.results_dir) as meta:
             meta.data['number'] = number = meta.data.get('number', 0) + 1
@@ -169,22 +152,10 @@ class Trainer (Module):
         self.dir = os.path.join(self.results_dir, self.opts.sys.module, self.group, self.name)
         check(f'Created Directory [cyan]{self.dir}[reset]')
 
-        self._build()
+        with Live(get_renderable=self._render_building, transient=True):
+            self._build()
         self.to(self.device)
         check('Built Trainer')
-
-        # # Debug
-        # self._system.cpu = Dot(usage=Progress(tasks=[0]))
-        # self._system.memory = Progress(tasks=[0])
-        # if self.device == 'cuda':
-        #     # import GPUtil
-        #     # self._gpus = GPUtil.getGPUs()
-        #     # self._system.gpu = Dot(memory=Progress(tasks=list(range(len(self._gpus)))),
-        #     #                        load=Progress(tasks=list(range(len(self._gpus)))))
-        #     self._system.gpu = Dot(memory=Progress(tasks=['memory']))
-        # if self.debug:
-        #     torch.autograd.anomaly_mode.set_detect_anomaly(True)
-        # check('Initialized System')
 
         # Load previous model
         if self.load_model != '':

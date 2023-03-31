@@ -3,12 +3,19 @@ import abc
 import argparse
 from inspect import isclass
 import sys
-from typing import Any, Optional, get_origin
+import time
+from typing import Any, Optional, cast, get_origin
+from rich.columns import Columns
+from rich.console import Group
+from rich.panel import Panel
+from rich.text import Text
 
 from torch import nn
 
+
 from ..cli import console
 from ..dot import Dot, DotItem
+from ..renderables import Alive, Status
 
 
 class Options (Dot):
@@ -35,6 +42,7 @@ class OptionsModule:
 
     _children: dict
     _is_built: bool = False
+    _is_building: bool = False
 
     def __init__(self, opts: Optional[Options] = None):
         """ 
@@ -195,11 +203,32 @@ class OptionsModule:
                     params[key] = val
         return params
 
+    def _render_building(self):
+
+        children = []
+        for child in self._children.values():
+            children.append(child._render_building())
+
+        if self._is_built:
+            state = 'built'
+        elif self._is_building:
+            state = 'working'
+        else:
+            state = 'waiting'
+        name = self.__class__.__name__
+
+        if len(children) > 0:
+            return Panel(Group(*children), border_style='black', title=name, width=50)
+        else:
+            return Columns([Status(status=state), Text(name)], padding=(0, 3))  # type: ignore
+
     def _build(self):
         """ 
         Recursively build all annotated and inherited OptionsModules
             Calls build() hook on the way up
         """
+
+        self._is_building = True
 
         for k, child in self._children.items():
             child._build()
@@ -208,6 +237,9 @@ class OptionsModule:
             setattr(self, k, child)
             self.__dict__[k] = child
 
+        self = cast(OptionsModule, self)
         self.build()
         self._is_built = True
+        self._is_building = False
+
         return self

@@ -5,11 +5,11 @@ import matplotlib.animation as anim
 import os
 
 from .cli import console
-from .util import quiet
+from .util import RedirectStream
 
 
 def figure(*args, **kwargs) -> tuple[plt.Figure, plt.Axes]:
-    with quiet():
+    with RedirectStream():
         fig, axes = plt.subplots(*args, figsize=(10, 10), **kwargs)
     return fig, cast(plt.Axes, axes)
 

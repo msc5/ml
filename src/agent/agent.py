@@ -162,8 +162,6 @@ class Agent (OptionsModule):
 
     pool: Optional[Pool] = None
 
-    buffer: OfflineDataset
-
     def _build(self):
         section('Building', module='Agent', color='yellow')
         return super()._build()

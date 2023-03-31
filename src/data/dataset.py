@@ -27,10 +27,10 @@ class OfflineDataset (OptionsModule):
 
     capacity: Optional[int] = None
 
-    def _build(self):
-        if self.environment is not None:
-            section('Building', module='Dataset', color='green')
-        return super()._build()
+    # def _build(self):
+    #     if self.environment is not None:
+    #         section('Building', module='Dataset', color='green')
+    #     return super()._build()
 
     def build(self):
 
@@ -51,7 +51,7 @@ class OfflineDataset (OptionsModule):
         if not os.path.exists(path):
             os.makedirs(path)
         torch.save(data, file, pickle_protocol=5)
-        check(f'Saved Dataset to {file}', color='green')
+        # check(f'Saved Dataset to {file}', color='green')
 
     def load(self, env: str):
         """
@@ -67,10 +67,10 @@ class OfflineDataset (OptionsModule):
         path = os.path.join('datasets', env, 'data.pt')
         if self.reload or not os.path.exists(path):
             raw = make_d4rl_dataset(env)
-            check(f'Creating Dataset', color='green')
+            # check(f'Creating Dataset', color='green')
         else:
             raw = torch.load(path)
-            check(f'Loading Dataset', color='green')
+            # check(f'Loading Dataset', color='green')
 
         X = raw['observations']
         N = raw['next_observations']

@@ -11,6 +11,8 @@ import time
 import tracemalloc
 from typing import Any, Callable, Iterable, Optional
 
+import ctypes
+
 import GPUtil
 import psutil
 from pyfzf.pyfzf import FzfPrompt
@@ -47,11 +49,37 @@ def makedir(path: str):
     if not os.path.exists(path): os.makedirs(path)
 
 
-@cl.contextmanager
-def quiet():
-    with open(os.devnull, 'w') as null:
-        with cl.redirect_stdout(null), cl.redirect_stderr(null):
-            yield None
+# @cl.contextmanager
+# def quiet():
+#     with open(os.devnull, 'w') as null:
+#         with cl.redirect_stdout(null), cl.redirect_stderr(null):
+#             yield None
+
+
+class RedirectStream (object):
+    # source: https://github.com/bulletphysics/bullet3/discussions/3441
+
+    @staticmethod
+    def _flush_c_stream(stream):
+        streamname = stream.name[1:-1]
+        libc = ctypes.CDLL(None)
+        libc.fflush(ctypes.c_void_p.in_dll(libc, streamname))
+
+    def __init__(self, stream=sys.stderr, file=os.devnull):
+        self.stream = stream
+        self.file = file
+
+    def __enter__(self):
+        self.stream.flush()  # ensures python stream unaffected
+        self.fd = open(self.file, "w+")
+        self.dup_stream = os.dup(self.stream.fileno())
+        os.dup2(self.fd.fileno(), self.stream.fileno())  # replaces stream
+
+    def __exit__(self, *_):
+        # quiet._flush_c_stream(self.stream)  # ensures C stream buffer empty
+        os.dup2(self.dup_stream, self.stream.fileno())  # restores stream
+        os.close(self.dup_stream)
+        self.fd.close()
 
 
 def ranges(x: torch.Tensor):

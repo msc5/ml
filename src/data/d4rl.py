@@ -1,4 +1,4 @@
-from ..util import quiet
+from ..util import RedirectStream
 
 import gym
 from gym import logger

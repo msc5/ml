@@ -1,3 +1,4 @@
+from rich.panel import Panel
 import torch
 
 from collections.abc import Callable
@@ -11,7 +12,7 @@ import rich.progress as progress
 from rich.spinner import Spinner
 from rich.styled import Styled
 import rich.table
-from rich.text import Text
+from rich.text import Text, TextType
 
 from .cli import console
 
@@ -135,6 +136,8 @@ class Status:
         'open': Text(f'{Characters.open_circle}', style='red'),
         'closed': Text(f'{Characters.closed_circle}', style='green'),
         'working': Styled(Spinner('dots'), style='cyan'),
+        'waiting': Text(f'{Characters.open_circle}', style='black'),
+        'built': Text(f'{Characters.closed_circle}', style='green')
     }
 
     def __init__(self, status: str, callback: Optional[Callable] = None) -> None:
@@ -167,6 +170,9 @@ def log(msg: Union[str, RenderableType]):
 
 
 def section(message: str, module: str = 'Trainer', color: str = 'blue', cons: Optional[Console] = None):
+    """
+    Print module section to console.
+    """
     msg = Padding(f'[ {module} ] {message}', (1, 0), style=color)
     if cons is not None:
         cons.print(msg)
@@ -174,4 +180,7 @@ def section(message: str, module: str = 'Trainer', color: str = 'blue', cons: Op
 
 
 def check(msg: str, color: str = 'blue'):
+    """
+    Print completed task to console.
+    """
     console.print(f' [{color}]{Characters.closed_circle}[reset]   {msg}')

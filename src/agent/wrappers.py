@@ -14,7 +14,7 @@ from ..cli import console
 from ..mp import ManagedQueue, Process
 from ..options import OptionsModule
 from ..renderables import Alive
-from ..util import quiet
+from ..util import RedirectStream
 
 logger.set_level(40)
 
@@ -27,40 +27,42 @@ def env_worker(queues: dict[str, ManagedQueue], environment: str):
 
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-    if 'breakout' in environment:
-        wrapper = AtariWrapper(environment)
-    else:
-        wrapper = GymWrapper(environment)
+    with RedirectStream():
 
-    while True:
+        if 'breakout' in environment:
+            wrapper = AtariWrapper(environment)
+        else:
+            wrapper = GymWrapper(environment)
 
-        function, input = queues['in'].get()
-        if function is None and input is None:
-            wrapper.close()
-            return
+        while True:
 
-        try:
-            if function == 'reset':
-                output = wrapper.reset()
-            elif function == 'step':
-                output = wrapper.step(input.clone())
-            elif function == 'render':
-                output = wrapper.render()
-            elif function == 'score':
-                output = wrapper.score(input)
-            elif function == 'sample_action':
-                output = wrapper.sample_action()
-            else:
-                raise Exception('Invalid function')
+            function, input = queues['in'].get()
+            if function is None and input is None:
+                wrapper.close()
+                return
 
-            queues['out'].put(output)
-            del function
-            del input
-            del output
+            try:
+                if function == 'reset':
+                    output = wrapper.reset()
+                elif function == 'step':
+                    output = wrapper.step(input.clone())
+                elif function == 'render':
+                    output = wrapper.render()
+                elif function == 'score':
+                    output = wrapper.score(input)
+                elif function == 'sample_action':
+                    output = wrapper.sample_action()
+                else:
+                    raise Exception('Invalid function')
 
-        except:
-            wrapper.close()
-            return
+                queues['out'].put(output)
+                del function
+                del input
+                del output
+
+            except:
+                wrapper.close()
+                return
 
 
 class Wrapper:
@@ -96,7 +98,7 @@ class Wrapper:
         return result
 
     def render(self, height: int = 256, width: int = 256):
-        with quiet():
+        with RedirectStream():
             self.in_queue.put(('render', (height, width)))
             output = self.out_queue.get()
             result = output.clone()
@@ -124,16 +126,14 @@ class GymWrapper (gym.Env):
     sim: mjc.MjSim
 
     def __init__(self, environment: str):
-        super().__init__()
 
-        with quiet():
+        with RedirectStream():
+            super().__init__()
             import d4rl as _
+            self._env = gym.make(environment)
 
         self.env = environment
-
-        self._env = gym.make(environment)
         self.sim = self._env.sim  # type: ignore
-
         self.action_space = self._env.action_space
 
         if isinstance(self.action_space, Discrete):
@@ -181,7 +181,8 @@ class GymWrapper (gym.Env):
         return self.state()
 
     def render(self, height: int = 256, width: int = 256):
-        frame = self.sim.render(height, width, camera_name='track', mode='offscreen')
+        with RedirectStream():
+            frame = self.sim.render(height, width, camera_name='track', mode='offscreen')
         frame = np.flip(frame, axis=0)
         frame = torch.from_numpy(frame.copy())
         frame = frame.to(torch.uint8)
@@ -199,7 +200,7 @@ class AtariWrapper (OptionsModule, gym.Env):
     def __init__(self, environment: str):
         super().__init__()
 
-        with quiet():
+        with RedirectStream():
             import d4rl_atari as _
 
         self._env = gym.make(environment)
