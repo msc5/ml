@@ -531,7 +531,7 @@ class Trainer (Module):
             table.add_row(*row)
         stats = f'[bold green]{cache["mean"]: 3.3f} ± {cache["std"]:3.3f}'
         table.add_section()
-        table.add_row(None, stats)
+        table.add_row(stats)
         table.add_section()
         table = Panel(table, border_style='black', title=f'Run {len(self._online_results)}', title_align='left')
 
