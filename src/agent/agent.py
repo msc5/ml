@@ -18,7 +18,7 @@ from .. import plots as pp
 from ..cli import console
 from ..data import OfflineDataset
 from ..mp import ManagedQueue, Pool
-from ..options import OptionsModule, Options
+from ..options import OptionsModule
 from ..dot import Dot
 from ..renderables import Table, section, check
 from .wrappers import Wrapper
