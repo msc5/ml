@@ -34,7 +34,7 @@ class OfflineDataset (OptionsModule):
 
     def build(self):
 
-        self._episodes: list[torch.Tensor] = []
+        self._indices: list[torch.Tensor] = []
         self._lengths = []
         self.data = {key: torch.empty(0) for key in ['X', 'A', 'R', 'T', 'V']}
         self.stats = {key: torch.empty(0) for key in ['X', 'A', 'R', 'T', 'V']}
@@ -85,20 +85,20 @@ class OfflineDataset (OptionsModule):
 
         # Set termination penalty
         R = raw['rewards'][:, None]
-        penalty_timesteps = raw['terminals'].logical_and(~raw['timeouts'])
-        R[penalty_timesteps] = self.terminal_penalty
+        penalty_timesteps = raw['terminals'] & ~raw['timeouts']
+        R[penalty_timesteps] += self.terminal_penalty
 
         assert len(X) == len(A) == len(R) == len(D)
 
         # -------------------- Make Indices -------------------- #
 
         if 'episodes' in raw and not self.reload:
-            self._episodes = raw['episodes']
+            self._indices = raw['episodes']
         else:
-            self._episodes = raw['episodes'] = self.split(D)
+            self._indices = raw['episodes'] = self.split(D)
             save = True
 
-        self._lengths = [len(e) for e in self._episodes]
+        self._lengths = [len(e) for e in self._indices]
 
         # -------------------- Compute Values -------------------- #
 
@@ -160,7 +160,7 @@ class OfflineDataset (OptionsModule):
                          description=f' [blue][reset]   Computing {description}...')
 
     def __len__(self):
-        return len(self._episodes)
+        return len(self._indices)
 
     def compute_values(self, R: torch.Tensor, discount: Optional[float] = None):
         """
@@ -172,23 +172,24 @@ class OfflineDataset (OptionsModule):
         """
 
         discount = discount or self.discount
-
         L, N = max(self._lengths), len(self._lengths)
         x = R.split(self._lengths)
+
+        # Pad with zeros
         rewards = torch.zeros(len(x), L)
         for i, episode in enumerate(x):
             rewards[i, 0:len(episode)] = episode.squeeze()
 
+        # Compute values
         discounts = discount ** (torch.arange(0, L))
         values = torch.zeros_like(rewards)
         for t in self._track(range(L), description='Values'):
-            V = (rewards[:, t + 1:] * discounts[:-(t + 1)]).sum(dim=1)
+            V = (rewards[:, t:] * discounts[:L - t]).sum(dim=1)
             values[:, t] = V
-        values[:, -1] = values[:, -2]
 
+        # Re-flatten values
         values = torch.cat([values[i, :self._lengths[i]] for i in range(N)])
         values = values[:, None]
-
         assert len(values) == sum(self._lengths)
 
         return values
@@ -291,7 +292,7 @@ class OfflineDataset (OptionsModule):
 
         def slice_sequence(episode: torch.Tensor):
             valid_max = min(self.max_length, len(episode)) - seq_len
-            start = random.randint(0, valid_max)
+            start = random.randint(0, valid_max - 1)
             episode = episode[start:(start + seq_len)]
             sequence = {key: data[episode] for key, data in self.data.items()}
             sequence['timesteps'] = torch.arange(start, start + seq_len)[:, None]
@@ -300,7 +301,7 @@ class OfflineDataset (OptionsModule):
         batch_size = min(batch_size, len(self))
 
         # Select batch_size from episodes that are at least seq_len long
-        episodes = [episode for episode in self._episodes if len(episode) >= seq_len]
+        episodes = [episode for episode in self._indices if len(episode) >= seq_len]
         episodes = random.sample(episodes, batch_size)
 
         # Randomly cut episodes down to seq_len and select data
