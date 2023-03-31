@@ -301,7 +301,7 @@ class OfflineDataset (OptionsModule):
         batch_size = min(batch_size, len(self))
 
         # Select batch_size from episodes that are at least seq_len long
-        episodes = [episode for episode in self._indices if len(episode) >= seq_len]
+        episodes = [episode for episode in self._indices if len(episode) > seq_len]
         episodes = random.sample(episodes, batch_size)
 
         # Randomly cut episodes down to seq_len and select data
