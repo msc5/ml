@@ -44,9 +44,9 @@ class Trainer (Module):
 
     # Loading / Saving
     # e.g. /results/narldiff/{group}/001-spring-green
-    load_model: str = ''
-    save_model: int = 500
-    rollout: int = 500
+    load_model: list[str] = []
+    save_model: int = 10000
+    rollout: int = 5000
     max_episodes: Optional[int] = None
     results_dir: str = 'results'
     tags: list[str] = []
@@ -149,7 +149,8 @@ class Trainer (Module):
         with Metadata(self.results_dir) as meta:
             meta.data['number'] = number = meta.data.get('number', 0) + 1
         self.name = f'{number:03d}-{self.group if self.group != "misc" else generate_name()}'
-        self.dir = os.path.join(self.results_dir, self.opts.sys.module, self.group, self.name)
+        self.dir = os.path.join(self.results_dir, self.name)
+        if not os.path.exists(self.dir): os.makedirs(self.dir)
         check(f'Created Directory [cyan]{self.dir}[reset]')
 
         # with Live(get_renderable=self._render_building, transient=True):
@@ -158,8 +159,9 @@ class Trainer (Module):
         check('Built Trainer')
 
         # Load previous model
-        if self.load_model != '':
-            self.load(self.load_model)
+        if len(self.load_model) > 0:
+            for load_model in self.load_model:
+                self.load(load_model)
             check('Loaded Weights')
 
         # Initialize wandb
@@ -169,7 +171,6 @@ class Trainer (Module):
             self.run = wandb.init(project=self.opts.sys.module, name=self.name,
                                   group=self.wandb_group,
                                   tags=[*self.tags, self.group],
-                                  # config={k: v.value for k, v in self.opts},
                                   config={k: v.value for k, v in self._gather_params()},
                                   id=self.wandb_id if self.wandb_resume else None)
             console.print()
@@ -180,20 +181,19 @@ class Trainer (Module):
 
         with Metadata(self.dir) as meta:
             meta.data['opts'] = self.opts._dict()
-            # meta.data['progress'] = self.progress._dict()
             meta.data['config'] = self._gather_params()._dict()
             meta.data['parse'] = self.parse()._dict()
             if self.log and self.run is not None:
                 meta.data['wandb'] = self.run.id
         check('Saved Options and Configuration')
 
-        if 'train' in self.opts.mode:
-            ln_source = os.path.join(os.getcwd(), self.dir)
-            ln_dest = os.path.join(self.results_dir, self.opts.sys.module, self.group, 'latest')
-            if os.path.exists(ln_dest):
-                os.unlink(ln_dest)
-            os.symlink(ln_source, ln_dest)
-            check(f'Created symlink at [cyan]{ln_dest}[reset] from [cyan]{ln_source}[reset]')
+        # if 'train' in self.opts.mode:
+        #     ln_source = os.path.join(os.getcwd(), self.dir)
+        #     ln_dest = os.path.join(self.results_dir, self.opts.sys.module, self.group, 'latest')
+        #     if os.path.exists(ln_dest):
+        #         os.unlink(ln_dest)
+        #     os.symlink(ln_source, ln_dest)
+        #     check(f'Created symlink at [cyan]{ln_dest}[reset] from [cyan]{ln_source}[reset]')
 
         check('Finished')
 
@@ -248,7 +248,7 @@ class Trainer (Module):
 
         # Save model
         self.save()
-        check('Saved')
+        check('Saved Weights')
 
         # Stop threads
         # with Live(self.main_thread, console=console, transient=True):
@@ -296,25 +296,31 @@ class Trainer (Module):
         self.progress.step('session')
 
     def log_metrics(self):
+        """
+        Logs self.metrics to wandb under namespace '{mode}-{class}-{key}'.
+        e.g. 'train-policy-Model-loss'
+        """
+
         if self.log:
             log = {}
             for model in self._selected:
 
+                identifier = f'{self.mode.replace(" ", "-")}-{model.__class__.__name__}'
+
                 for key, val in model.metrics:
-                    key = f'{self.group}-{model.__class__.__name__}{key}'
+                    namespace = f'{identifier}-{key}'
                     if isinstance(val.value, Number):
-                        log[key] = val.value
+                        log[namespace] = val.value
 
                 for key, val in model.ranges:
-                    key = f'{self.group}-{model.__class__.__name__}{key}'
+                    namespace = f'{identifier}-{key}'
                     if isinstance(val.value, Ranges):
-                        log[f'{key}.min'] = val.value._min
-                        log[f'{key}.max'] = val.value._max
-                        log[f'{key}.mean'] = val.value._mean
-                        log[f'{key}.std'] = val.value._std
+                        log[f'{namespace}.min'] = val.value._min
+                        log[f'{namespace}.max'] = val.value._max
+                        log[f'{namespace}.mean'] = val.value._mean
+                        log[f'{namespace}.std'] = val.value._std
 
-            step = self.progress.get('train') if self.wandb_resume else self.progress.get('session')
-            wandb.log(log, step=step)
+            wandb.log(log, step=self.progress.get('session'))
             self._logged.update(Dot(log))
 
     def test_loop(self):
@@ -335,7 +341,9 @@ class Trainer (Module):
             table.add_row('Module', self.opts.sys.module)
             table.add_row('Group', Text(self.group, style='cyan'))
             table.add_row('Run', Text(self.name, style='magenta'))
-            table.add_row('Loaded', Text(self.load_model, style='green') or empty)
+
+            # table.add_row('Loaded', Text(lm, style='green') or empty)
+
             yield table
 
         @rgroup()
@@ -444,28 +452,38 @@ class Trainer (Module):
 
     def save(self):
 
-        # Save weights
-        model_path = os.path.join(self.dir, 'model.pt')
-        torch.save(self.state_dict(), model_path)
+        # Save weights of selected models only
+        for selected in self._selected:
+            path = os.path.join(self.dir, selected.__class__.__name__ + '.pt')
+            torch.save(selected.state_dict(), path)
 
     def load(self, run: str):
+
+        breakpoint()
+
         section(f'Loading Model [magenta]{run}')
-        model_path = os.path.join(run, 'model.pt')
-        state_dict = torch.load(model_path, map_location=self.device)
+
+        load_dict = {}
+        for selected in self._selected:
+            model_path = os.path.join(run, selected.__class__.__name__ + 'pt')
+            load_dict.update(torch.load(model_path, map_location=self.device))
+
+        # Check differences between current model and loaded dictionary
         for key, val in self.named_parameters():
-            if key in state_dict:
+            if key in load_dict:
                 if any([retrain in key for retrain in self.retrain]):
                     check(f'Retraining: [yellow]{key}[reset]', color='magenta')
-                    del state_dict[key]
-                elif (state_dict[key].shape != val.shape):
+                    del load_dict[key]
+                elif (load_dict[key].shape != val.shape):
                     check(f'Shape Mismatch: [red]{key}[reset]', color='magenta')
                     console.print(f'     Expected: {val.shape}')
-                    console.print(f'     Loaded:   {state_dict[key].shape}')
-                    del state_dict[key]
+                    console.print(f'     Loaded:   {load_dict[key].shape}')
+                    del load_dict[key]
             else:
                 check(f'Missing Parameter: [yellow]{key}[reset]', color='magenta')
+
         to_delete = set()
-        for key, val in state_dict.items():
+        for key, val in load_dict.items():
             if any([retrain in key for retrain in self.retrain]):
                 check(f'Retraining: [red]{key}[reset]', color='magenta')
                 to_delete.add(key)
@@ -473,11 +491,11 @@ class Trainer (Module):
                 check(f'Ignoring: [red]{key}[reset]', color='magenta')
                 to_delete.add(key)
         for key in to_delete:
-            del state_dict[key]
+            del load_dict[key]
         check('Finished', color='magenta')
         console.print('')
 
-        self.load_state_dict(state_dict, strict=False)
+        self.load_state_dict(load_dict, strict=False)
 
     def update_online(self, cache: dict):
 
