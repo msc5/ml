@@ -152,8 +152,8 @@ class Trainer (Module):
         self.dir = os.path.join(self.results_dir, self.opts.sys.module, self.group, self.name)
         check(f'Created Directory [cyan]{self.dir}[reset]')
 
-        with Live(get_renderable=self._render_building, transient=True):
-            self._build()
+        # with Live(get_renderable=self._render_building, transient=True):
+        self._build()
         self.to(self.device)
         check('Built Trainer')
 
