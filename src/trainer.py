@@ -411,9 +411,9 @@ class Trainer (Module):
             Layout(name='title', size=7),
             Layout(name='content'))
         layout['title'].split_row(
-            Layout(name='run'),
-            Layout(name='info'),
-            Layout(name='system'))
+            Layout(name='run', ratio=2),
+            Layout(name='info', ratio=3),
+            Layout(name='system', ratio=2))
         layout['content'].split_row(
             Layout(name='meta', ratio=2),
             Layout(name='metrics', ratio=3),
