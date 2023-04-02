@@ -162,9 +162,9 @@ class Agent (OptionsModule):
 
     pool: Optional[Pool] = None
 
-    def _build(self):
-        section('Building', module='Agent', color='yellow')
-        return super()._build()
+    # def _build(self):
+    #     section('Building', module='Agent', color='yellow')
+    #     return super()._build()
 
     def build(self):
 
