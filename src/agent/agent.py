@@ -470,9 +470,9 @@ class Agent (OptionsModule):
 
             self.alive = {k: v for k, v in self.alive.items() if v != None}
 
-            # action = actor.act(self.data, self.cache, self.alive)
-            # for act, env in enumerate(self.alive):
-            #     self.data['A'][env] = action[act].cpu()
+            action = actor.act(self.data, self.cache, self.alive)
+            for act, env in enumerate(self.alive):
+                self.data['A'][env] = action[act].cpu()
 
             for env in list(self.alive):
                 self.episode_step(env, actor, render, **kwargs)
