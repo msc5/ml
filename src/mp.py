@@ -13,6 +13,7 @@ import torch.multiprocessing.queue as tmpq
 from .dot import Dot
 from .cli import console
 from .io import generate_name
+from .shared import OnlineResults
 from .renderables import Alive, Progress, Table
 
 COLUMN_WIDTH = 20
@@ -89,6 +90,8 @@ class Manager (mpman.SyncManager):
     Queue: type[ManagedQueue]
     Dot: type[Dot]
 
+    OnlineResults: type[OnlineResults]
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -100,6 +103,7 @@ class Manager (mpman.SyncManager):
 
 Manager.register('Queue', ManagedQueue, exposed=['get', 'put', 'size'])
 Manager.register('Dot', Dot, exposed=['__setitem__', '__getitem__', '__call__', '__rich__', '_table'])
+Manager.register('OnlineResults', OnlineResults)
 
 
 @group()
