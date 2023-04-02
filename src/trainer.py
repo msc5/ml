@@ -28,6 +28,7 @@ from .options import Options
 from .dot import Dot
 from .renderables import Alive, Table, check, section
 from .util import Fuzzy, Keyboard, Metadata, Ranges, Screens, Steps, System, Timer
+from .shared import OnlineResults
 
 
 os.environ["WANDB_CONSOLE"] = "off"
@@ -66,6 +67,9 @@ class Trainer (Module):
     _threads: dict
     _loops: list
     _gpus: list
+
+    # Private variables
+    _online_results: Optional[OnlineResults] = None
 
     # Renderables
     layout: Layout
@@ -116,7 +120,6 @@ class Trainer (Module):
         self.main_thread = Thread(main=True)
         self._logged = Layout()
         self.agent_table = Layout()
-        self._online_results = []
 
         g = Dot()
         g.repo = git.Repo(os.getcwd())  # type: ignore
@@ -479,9 +482,9 @@ class Trainer (Module):
 
         self.load_state_dict(state_dict, strict=False)
 
-    def update_online(self, cache: dict):
+    def _render_online_table(self, cache: dict, name: str = 'Unnamed Run', style: str = 'black'):
 
-        def format(data: Any):
+        def format_float(data: Any):
             if type(data) == float:
                 return f'{data: 3.3f}'
             else:
@@ -494,27 +497,36 @@ class Trainer (Module):
 
         tags = ['score', 'returns', 'steps']
         cols = [t.capitalize() for t in tags]
-
         columns = (Column(col, ratio=1) for col in cols)
         table = Table(*columns, show_header=True, box=None, header_style='bold yellow')
         for run in ordered(cache).values():
-            row = (f'{format(run[tag])}' for tag in tags)
+            row = (f'{format_float(run[tag])}' for tag in tags)
             table.add_row(*row)
-        stats = f'[bold green]{cache["mean"]: 3.3f} ± {cache["std"]:3.3f}'
-        table.add_section()
-        table.add_row(stats)
-        table.add_section()
-        table = Panel(table, border_style='black', title=f'Run {len(self._online_results)}', title_align='left')
 
-        self._online_results.append((cache['mean'], table))
+        if 'mean' in cache and 'std' in cache:
+            stats = f'[bold green]{cache["mean"]: 3.3f} ± {cache["std"]:3.3f}'
+            table.add_row(stats)
+        table = Panel(table, border_style=style, title=name, title_align='left')
+
+        return table
 
     @rgroup()
     def _render_online_results(self):
 
-        # Sort results by mean score
-        tables = list(sorted(self._online_results, key=lambda x: -x[0]))
-        for _, table in tables[:5]:
-            yield table
+        if self._online_results is not None:
+
+            if (current := self._online_results.get_current()) != {}:
+                yield self._render_online_table(current, name='Current Run', style='yellow')
+
+            if len(history := self._online_results.get_history()) > 0:
+
+                # Sort results by mean score
+                caches = sorted(enumerate(history), key=lambda x: -x[1].get('mean', 0))
+                for run, cache in caches[:5]:
+                    yield self._render_online_table(cache, name=f'Run {run}')
+
+        else:
+            yield Panel('No Results', border_style='red')
 
 
 CurrentTrainer: Optional[Trainer] = None

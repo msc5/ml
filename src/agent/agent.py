@@ -12,15 +12,14 @@ import numpy as np
 import torch
 import wandb
 
-from ..util import Metadata, Timer
-
 from .. import plots as pp
 from ..cli import console
-from ..data import OfflineDataset
+from ..dot import Dot
 from ..mp import ManagedQueue, Pool
 from ..options import OptionsModule
-from ..dot import Dot
-from ..renderables import Table, section, check
+from ..renderables import Table, check, section
+from ..shared import OnlineResults
+from ..util import Metadata, RedirectStream, Timer
 from .wrappers import Wrapper
 
 
@@ -162,9 +161,9 @@ class Agent (OptionsModule):
 
     pool: Optional[Pool] = None
 
-    def _build(self):
-        section('Building', module='Agent', color='yellow')
-        return super()._build()
+    # def _build(self):
+    #     section('Building', module='Agent', color='yellow')
+    #     return super()._build()
 
     def build(self):
 
@@ -195,9 +194,10 @@ class Agent (OptionsModule):
         self.data = self.container()
 
         # Initialize Environments
-        self.envs = {i: Wrapper(self.environment, id=i) for i in range(self.parallel)}
-        for env in self.envs:
-            self.reset(env)
+        with RedirectStream():
+            self.envs = {i: Wrapper(self.environment, id=i) for i in range(self.parallel)}
+            for env in self.envs:
+                self.reset(env)
 
     def container(self):
         data = {}
@@ -402,12 +402,17 @@ class Agent (OptionsModule):
         cache['returns'].append(returns + cache['reward'][-1])
         cache['score'].append(self.envs[env].score(cache['returns'][-1]) * 100)
 
+        # Sync to shared struct
+        keys = ['score', 'reward', 'returns', 'steps', 'status', 'environment', 'episode']
+        vals = {key: self.get_last(val) for key, val in cache.items() if key in keys}
+        self._results.set_current(env, vals)
+
         if self.episode_is_done(env):
-            cache['status'] = 'complete'
-            dead_keys = ['score', 'reward', 'returns', 'steps', 'status', 'environment', 'episode']
+            cache['status'] = vals['status'] = 'complete'
 
             # Collect completed episode
-            self.dead[self.alive[env]] = {key: self.get_last(val) for key, val in cache.items() if key in dead_keys}
+            self.dead[self.alive[env]] = vals
+            self._results.set_complete(env)
 
             actor.after(cache, env)
             self.save(env)
@@ -418,6 +423,7 @@ class Agent (OptionsModule):
                 actor: Actor,
                 episodes: Optional[int] = None,
                 dir: Optional[str] = None,
+                results: Optional[OnlineResults] = None,
                 log: bool = False,
                 render: bool = True,
                 stop: Optional[threading.Event] = None,
@@ -452,6 +458,8 @@ class Agent (OptionsModule):
             self.io_queue = self.pool.queue
             self.pool.apply_async(target=io_loop, parameters=[self.io_lock, log])
 
+        self._results = results or self.manager.OnlineResults()
+
         # --------------------------------------------------------------------------------
         # Loop
         # --------------------------------------------------------------------------------
@@ -462,9 +470,9 @@ class Agent (OptionsModule):
 
             self.alive = {k: v for k, v in self.alive.items() if v != None}
 
-            action = actor.act(self.data, self.cache, self.alive)
-            for act, env in enumerate(self.alive):
-                self.data['A'][env] = action[act].cpu()
+            # action = actor.act(self.data, self.cache, self.alive)
+            # for act, env in enumerate(self.alive):
+            #     self.data['A'][env] = action[act].cpu()
 
             for env in list(self.alive):
                 self.episode_step(env, actor, render, **kwargs)
@@ -477,6 +485,8 @@ class Agent (OptionsModule):
                 break
 
         self.dead['mean'], self.dead['std'] = self.stat(self.dead)
+        self._results.reset_current()
+        self._results.reset_history()
         return self.dead
 
     def close(self):
