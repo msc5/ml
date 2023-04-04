@@ -1,15 +1,19 @@
 import os
 import random
 from typing import Iterable, Literal, Optional
+import gym
 
 from rich.progress import track
 import torch
+import numpy as np
+
+import mujoco_py as mjc
 
 from ..dot import Dot
 from ..cli import console
 from ..data.d4rl import make_d4rl_dataset
 from ..options import OptionsModule
-from ..renderables import section, check
+from ..util import RedirectStream
 
 
 class OfflineDataset (OptionsModule):
@@ -20,7 +24,7 @@ class OfflineDataset (OptionsModule):
 
     stats: dict
 
-    environment: Optional[str] = None
+    environment: str = ''
     discount: float = 0.99
     terminal_penalty: float = -100.0
     max_length: int = 1000
@@ -39,21 +43,21 @@ class OfflineDataset (OptionsModule):
         self.data = {key: torch.empty(0) for key in ['X', 'A', 'R', 'T', 'V']}
         self.stats = {key: torch.empty(0) for key in ['X', 'A', 'R', 'T', 'V']}
 
-        if self.environment is not None:
-            self.load(self.environment)
+        if self.environment != '':
+            self.load()
 
-    def save(self, data: dict, env: str):
+    def save(self, data: dict):
         """
         Saves compressed version of D4RL dataset to 'datasets/'
         """
-        path = os.path.join('datasets', env)
+        path = os.path.join('datasets', self.environment)
         file = os.path.join(path, 'data.pt')
         if not os.path.exists(path):
             os.makedirs(path)
         torch.save(data, file, pickle_protocol=5)
         # check(f'Saved Dataset to {file}', color='green')
 
-    def load(self, env: str):
+    def load(self):
         """
         Attempts to load compressed dataset from 'datasets/'. If no dataset
         exist, generates it.
@@ -64,9 +68,9 @@ class OfflineDataset (OptionsModule):
         # -------------------- Load Data -------------------- #
 
         # Load raw data
-        path = os.path.join('datasets', env, 'data.pt')
+        path = os.path.join('datasets', self.environment, 'data.pt')
         if self.reload or not os.path.exists(path):
-            raw = make_d4rl_dataset(env)
+            raw = make_d4rl_dataset(self.environment)
             # check(f'Creating Dataset', color='green')
         else:
             raw = torch.load(path)
@@ -117,18 +121,24 @@ class OfflineDataset (OptionsModule):
         if 'infos/qvel' in raw:
             self.data['QV'] = raw['infos/qvel']
 
+        # -------------------- Render Video -------------------- #
+
+        if 'QP' in self.data and 'QV' in self.data:
+            frames = self.render_video()
+            raw['frames'] = frames
+
         # -------------------- Compute Stats -------------------- #
 
         if 'stats' in raw and not self.reload:
             self.stats = raw['stats']
         else:
-            for key, val in self._track(self.data.items(), description='Stats'):
+            for key, val in self._track(self.data.items(), description='Computing Stats'):
                 if isinstance(val, torch.Tensor):
                     self.stats[key] = self.compute_stats(val)
             raw['stats'] = self.stats
             save = True
 
-        if save: self.save(raw, env)
+        if save: self.save(raw)
 
     def split(self, terminals: torch.Tensor):
         """
@@ -157,7 +167,7 @@ class OfflineDataset (OptionsModule):
             return iterable
         else:
             return track(iterable, transient=True,
-                         description=f' [blue][reset]   Computing {description}...')
+                         description=f' [blue][reset]  {description}...')
 
     def __len__(self):
         return len(self._indices)
@@ -223,6 +233,27 @@ class OfflineDataset (OptionsModule):
         return {'high': high, 'low': low,
                 'mean': mean, 'std': std,
                 'shape': shape, 'type': type}
+
+    def render_video(self):
+
+        env = gym.make(self.environment)
+        n = len(self.data['QP'])
+        frames = torch.zeros((n, 256, 256, 3), dtype=torch.uint8)
+
+        for i in self._track(range(n), description='Rendering Frames'):
+
+            qp, qv = self.data['QP'][i], self.data['QV'][i]
+            env.set_state(qp, qv)  # type: ignore
+
+            height, width = 256, 256
+            with RedirectStream():
+                frame = env.sim.render(height, width, camera_name='track', mode='offscreen')  # type: ignore
+            frame = np.flip(frame, axis=0)
+            frame = torch.from_numpy(frame.copy())
+            frame = frame.to(torch.uint8)
+            frames[i] = frame
+
+        return frames
 
     def normalize(self, x: torch.Tensor, key: Optional[str] = None):
         """
