@@ -81,6 +81,9 @@ class Module (OptionsModule, nn.Module):
         # Initialize optimizers
         self.optimizers = Dot(self.init_optimizers())
 
+        # Move self to device
+        self.to(self.device)
+
         return built
 
     def _grad_update_hook(self, module: nn.Module, in_grad, out_grad):
@@ -123,6 +126,16 @@ class Module (OptionsModule, nn.Module):
         for target_param, learner_param in zip(self.parameters(), learner.parameters()):
             updated_param = p * learner_param.data + (1.0 - p) * target_param.data
             target_param.data.copy_(updated_param)
+
+    def add_module(self, name: str, module: Module | nn.Module):
+
+        # Add a torch module
+        super().add_module(name, module)
+
+        # Add to _children for OptionsModule to initialize
+        self._children[name] = module
+        if isinstance(module, Module) and not module._is_built:
+            module._build()
 
     # --------------------  Rendering --------------------  #
 
