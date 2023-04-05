@@ -21,7 +21,7 @@ from rich.console import Console, group
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
 from rich.table import Column
-from rich.text import Text, TextType
+from rich.text import Text
 import torch
 import torch.nn as nn
 from torchviz import make_dot
@@ -106,9 +106,11 @@ class Ranges:
         self._std = x.std().item() if x.is_floating_point() else None
 
     def __rich__(self):
-        ranges = Text.from_markup(f'[[green]{self._min:.2f}[/green], [green]{self._max:.2f}[/green]]')
-        normal = Text.from_markup(f'([blue]{self._mean:.2f}[/blue], [blue]{self._std:.2f}[/blue])')
-        return ranges + ' ~ ' + normal
+        msg = Text.from_markup(f'[[green]{self._min:.2f}[/green], [green]{self._max:.2f}[/green]]')
+        if self._mean is not None and self._std is not None:
+            msg += ' ~ '
+            msg += Text.from_markup(f'([blue]{self._mean:.2f}[/blue], [blue]{self._std:.2f}[/blue])')
+        return msg
 
 
 class FreezeParameters:

@@ -3,6 +3,7 @@
 **/results/
 **/.neptune/
 **/wandb/
+.ipynb_checkpoints
 MUJOCO*
 /datasets/
 /slurm-*
