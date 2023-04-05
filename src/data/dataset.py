@@ -26,6 +26,7 @@ class OfflineDataset (OptionsModule):
     discount: float = 0.99
     terminal_penalty: float = -100.0
     max_length: int = 1000
+    frame_size: int = 64
 
     capacity: Optional[int] = None
 
@@ -187,15 +188,12 @@ class OfflineDataset (OptionsModule):
 
     def load_video(self):
 
-        size = 32
-
         with RedirectStream():
             env = gym.make(self.environment)
 
         n = len(self.data['QP'])
-        # frames = torch.zeros((n, 3, size, size), dtype=torch.uint8)
         frames = None
-        resize = Resize((size, size), antialias=True) # type: ignore
+        resize = Resize((self.frame_size, self.frame_size), antialias=True) # type: ignore
 
         for i in self._track(range(n), description='Rendering Frames'):
 
