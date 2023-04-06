@@ -94,8 +94,6 @@ class Embedding (Module):
     count: int
     size: int
 
-    # _hide_grads: bool = True
-
     def build(self):
         self.embeddings = nn.Embedding(self.count, self.size)
         self.weight = self.embeddings.weight

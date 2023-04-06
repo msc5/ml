@@ -36,6 +36,7 @@ class Module (OptionsModule, nn.Module):
     has added functionality for use with the PyTorch Library.
     """
 
+    _hide_module: bool = False
     _hide_grads: bool = False
     _selected: bool = False
 
@@ -62,9 +63,14 @@ class Module (OptionsModule, nn.Module):
         built = super()._build()
 
         # Check if module is common (Contains no children Modules)
-        self._commons = sum([not isinstance(c, Module) for c in self.children()])
-        self._uncommons = sum([isinstance(c, Module) for c in self.children()])
-        self._is_common = self._uncommons == 0
+        self._is_common = True
+        self._commons = self._uncommons = 0
+        for module in self.children():
+            if isinstance(module, Module) and not module._hide_module:
+                self._uncommons += 1
+                self._is_common = False
+            else:
+                self._commons += 1
 
         # Register gradient hook
         super().register_full_backward_hook(self._grad_update_hook)
@@ -127,7 +133,7 @@ class Module (OptionsModule, nn.Module):
             updated_param = p * learner_param.data + (1.0 - p) * target_param.data
             target_param.data.copy_(updated_param)
 
-    def add_module(self, name: str, module: Module | nn.Module):
+    def add_module(self, name: str, module: Module | nn.Module, hide: bool = False):
 
         # Add a torch module
         super().add_module(name, module)
@@ -136,6 +142,7 @@ class Module (OptionsModule, nn.Module):
         self._children[name] = module
         if isinstance(module, Module) and not module._is_built:
             module._build()
+            module._hide_module = hide
 
     # --------------------  Rendering --------------------  #
 
@@ -170,13 +177,14 @@ class Module (OptionsModule, nn.Module):
         uncommons = []
 
         for name, child in self.named_children():
-            if isinstance(child, Module) and not child._hide_grads:
+            if isinstance(child, Module) and not child._hide_grads and not child._hide_module:
+                module = Text('( ' + child.__class__.__name__ + ' )', style='blue')
                 if child._is_common:
                     heading = Text(name, style='yellow')
-                    table.add_row(heading, child._render_device(), child._render())
+                    table.add_row(heading, module, child._render_device(), child._render())
                 else:
                     heading = [Text(name, style='bold cyan')]
-                    heading = Columns([*heading, child._render_params()], padding=(0, 2))
+                    heading = Columns([*heading, module, child._render_params()], padding=(0, 2))
                     panel = Group(heading, child._render())
                     uncommons.append(panel)
 

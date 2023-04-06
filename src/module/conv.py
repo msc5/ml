@@ -1,25 +1,10 @@
-from typing import Any, Literal, Union
+from typing import Any, Literal, Optional, Union
 
 from torch import nn
 import torch
 
+from ..cli import console
 from .module import Module
-from ..options import Options
-
-
-def conv_layer(dimension: Literal['1d', '2d', '3d'], deconv: bool):
-    if dimension == '1d':
-        conv = nn.ConvTranspose1d if deconv else nn.Conv1d
-        norm = nn.BatchNorm1d
-    elif dimension == '2d':
-        conv = nn.ConvTranspose2d if deconv else nn.Conv2d
-        norm = nn.BatchNorm2d
-    elif dimension == '3d':
-        conv = nn.ConvTranspose3d if deconv else nn.Conv3d
-        norm = nn.BatchNorm3d
-    else:
-        raise Exception('dimension must be \'2d\', \'1d\', or \'3d\'.')
-    return conv, norm
 
 
 class ConvBlock (Module):
@@ -38,8 +23,29 @@ class ConvBlock (Module):
     dimension: Literal['1d', '2d', '3d'] = '2d'
 
     def build(self):
-        conv, norm = conv_layer(self.dimension, self.deconv)
-        padding = self.kernel_size // 2 if self.padding == 'same' else self.padding
+
+        # Select conv and norm layer
+        if self.dimension == '1d':
+            conv = nn.ConvTranspose1d if self.deconv else nn.Conv1d
+            norm = nn.BatchNorm1d
+        elif self.dimension == '2d':
+            conv = nn.ConvTranspose2d if self.deconv else nn.Conv2d
+            norm = nn.BatchNorm2d
+        elif self.dimension == '3d':
+            conv = nn.ConvTranspose3d if self.deconv else nn.Conv3d
+            norm = nn.BatchNorm3d
+        else:
+            raise Exception('dimension must be \'2d\', \'1d\', or \'3d\'.')
+
+        # Compute padding
+        if self.padding == 'same':
+            padding = self.kernel_size // 2
+        elif isinstance(self.padding, int):
+            padding = self.padding
+        else:
+            raise Exception('padding must be \'same\' or int')
+
+        # Construct layers
         block = conv(self.in_chan, self.out_chan,
                      kernel_size=self.kernel_size, stride=self.stride,
                      padding=padding)
@@ -84,16 +90,12 @@ class ConvBlocks (Module):
         for i in range(len(self.chans) - 1):
             opts = self.opts(in_chan=self.chans[i], out_chan=self.chans[i + 1])
             block = ConvBlock(opts)
-            block._hide_grads = True
+            block._hide_module = True
             self.add_module(f'_block{i}', block)
             self._layers += [block]
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor):
         x = x.to(self.device)
-
-        # [ b, h, w ] -> [ b, 1, h, w ]
-        if len(x.shape) == 3 and self.dimension == '2d':
-            x = x[None]
 
         for layer in self._layers:
             x = layer(x)
@@ -101,16 +103,149 @@ class ConvBlocks (Module):
         return x
 
 
-if __name__ == "__main__":
+class DownConvBlock (ConvBlocks):
 
-    from ml import console
+    chans: list[int]
+    layers: int = 1
 
-    model = ConvBlocks({'chans': [3, 32, 1]})
-    model._build()
+    c_kernel_size: int = 4
+    c_stride: int = 2
+    c_padding: int = 1
 
-    inp = torch.rand(5, 3, 10, 10)
-    out = model(inp)
+    def build(self):
 
-    console.log(model)
-    console.log(inp.shape)
-    console.log(out.shape)
+        # Construct blocks
+        self._layers = []
+        for i in range(len(self.chans) - 1):
+
+            opts = self.opts(in_chan=self.chans[i], out_chan=self.chans[i + 1])
+
+            # Downsample last layer
+            if i == len(self.chans) - 2:
+                opts = opts(kernel_size=self.c_kernel_size, stride=self.c_stride, padding=self.c_padding)
+
+            block = ConvBlock(opts)
+            self.add_module(f'_block{i}', block, hide=True)
+            self._layers += [block]
+
+
+class UpConvBlock (ConvBlocks):
+
+    chans: list[int]
+    layers: int = 1
+    residual: bool = False
+
+    c_kernel_size: int = 4
+    c_stride: int = 2
+    c_padding: int = 1
+
+    def build(self):
+
+        # Reverse channels
+        chans = list(reversed(self.chans))
+
+        if self.residual:
+            chans[0] = 2 * chans[0]
+
+        # Construct blocks
+        self._layers = []
+        for i in range(len(chans) - 1):
+
+            opts = self.opts(in_chan=chans[i], out_chan=chans[i + 1])
+
+            # Upsample last layer
+            if i == len(chans) - 2:
+                opts = opts(kernel_size=self.c_kernel_size, stride=self.c_stride,
+                            padding=self.c_padding, deconv=True)
+
+            block = ConvBlock(opts)
+            self.add_module(f'_block{i}', block, hide=True)
+            self._layers += [block]
+
+    def forward(self, x: torch.Tensor, residual: Optional[torch.Tensor] = None):
+        x = x.to(self.device)
+
+        # Concatenate residual
+        if residual is not None:
+            residual = residual.to(self.device)
+            x = torch.cat([x, residual], dim=-3)
+
+        for layer in self._layers:
+            x = layer(x)
+
+        return x
+
+
+class Unet (Module):
+
+    chans: list[list[int]]
+    residual: bool = True
+
+    c_kernel_size: int = 4
+    c_stride: int = 2
+    c_padding: int = 1
+
+    def build(self):
+
+        self._downs, self._ups = [], []
+
+        # Construct downconv
+        for i, group in enumerate(self.chans):
+
+            opts = self.opts(chans=group)
+            block = DownConvBlock(opts)
+            self.add_module(f'_down{i}', block, hide=True)
+            self._downs += [block]
+
+        # Construct upconv
+        for i, group in enumerate(reversed(self.chans)):
+
+            opts = self.opts(chans=group)
+            block = UpConvBlock(opts)
+            self.add_module(f'_up{i}', block, hide=True)
+            self._ups += [block]
+
+    def dry_run(self, size: Union[int, float] = 64, chan: int = 3):
+
+        shape = [chan, size, size]
+        shapes = [shape]
+
+        # Downconv
+        for group in self.chans:
+            size = (size - self.c_kernel_size + 2 * self.c_padding) / self.c_stride + 1
+            shape = [group[-1], size, size]
+            shapes.append(shape)
+
+        hid_shape = shape
+
+        # Upconv
+        for group in reversed(self.chans):
+            size = (size - 1) * self.c_stride - 2 * self.c_padding + (self.c_kernel_size - 1) + 1
+            shape = [group[0], size, size]
+            shapes.append(shape)
+
+        return hid_shape, shapes
+
+    def downsample(self, x: torch.Tensor):
+
+        h = []
+
+        for down in self._downs:
+            x = down(x)
+            h.append(x)
+
+        return x, h
+
+    def upsample(self, x: torch.Tensor, h: list[torch.Tensor]):
+
+        for up in self._ups:
+            x = up(x, h.pop(-1))
+
+        return x
+
+    def forward(self, x: torch.Tensor):
+
+        z, h = self.downsample(x)
+        y = self.upsample(z, h)
+
+        return y
