@@ -77,7 +77,7 @@ class OfflineDataset (OptionsModule):
             self.data = make_d4rl_dataset(self.environment)
             self.load_splits()
             self.load_values()
-            self.load_video()
+            # self.load_video()
             self.load_stats()
             self.save()
 
@@ -193,7 +193,7 @@ class OfflineDataset (OptionsModule):
 
         n = len(self.data['QP'])
         frames = None
-        resize = Resize((self.frame_size, self.frame_size), antialias=True) # type: ignore
+        resize = Resize((self.frame_size, self.frame_size), antialias=True)  # type: ignore
 
         for i in self._track(range(n), description='Rendering Frames'):
 
@@ -284,7 +284,7 @@ class OfflineDataset (OptionsModule):
         Sample 'batch_size' continuous sequences of data of length given by 'seq_len'.
         """
 
-        tensors = dict(filter(lambda x : isinstance(x[1], torch.Tensor), self.data.items()))
+        tensors = dict(filter(lambda x: isinstance(x[1], torch.Tensor), self.data.items()))
 
         def slice_sequence(episode: torch.Tensor):
             valid_max = min(self.max_length, len(episode)) - seq_len
