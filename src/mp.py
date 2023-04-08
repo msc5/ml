@@ -232,11 +232,14 @@ class Process:
                  target: Callable | None = None,
                  name: str | None = None,
                  queue: Queue | None = None,
-                 hidden: bool = False, *arguments, **kwargs):
+                 hidden: bool = False, 
+                 hide_queue: bool = False,
+                 *arguments, **kwargs):
 
         self.target = target
         self.name = name or generate_name()
         self.alive = Alive(state=False)
+        self.hide_queue = hide_queue
 
         self.children = {}
 
@@ -288,7 +291,7 @@ class Process:
             render = Group(render, _render_children(self.children))
         yield render
 
-        if render_queue:
+        if render_queue and not self.hide_queue:
             yield self.queue
 
     def __rich__(self):

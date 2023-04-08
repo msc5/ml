@@ -5,6 +5,9 @@ from ..dot import Dot
 
 
 class OnlineDataset (OfflineDataset):
+    """
+    A.K.A. "Replay Buffer"
+    """
 
     buffer: dict = {}
 
@@ -16,7 +19,7 @@ class OnlineDataset (OfflineDataset):
         else:
             return 0
 
-    def push(self, episode: dict):
+    def push(self, episode: dict) -> None:
         """
         Add episode to online RL dataset.
         Inputs:

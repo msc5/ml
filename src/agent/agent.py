@@ -82,7 +82,7 @@ def io_loop(queues: dict[str, ManagedQueue], io_lock: Any, log: bool = False):
                     if log:
                         video = {'name': name + '_values',
                                  'video': animation,
-                                 'step': cache['step'],
+                                 # 'step': cache['step'],
                                  'format': 'gif',
                                  'fps': fps}
                         queues['out'].put(('log video', video))
@@ -95,7 +95,7 @@ def io_loop(queues: dict[str, ManagedQueue], io_lock: Any, log: bool = False):
                     if log:
                         video = {'name': name,
                                  'video': render.transpose(0, 3, 1, 2),
-                                 'step': cache['step'],
+                                 # 'step': cache['step'],
                                  'format': 'gif',
                                  'fps': fps}
                         queues['out'].put(('log video', video))
@@ -105,7 +105,7 @@ def io_loop(queues: dict[str, ManagedQueue], io_lock: Any, log: bool = False):
                     if not 'runs' in meta.data:
                         meta.data['runs'] = {}
                     entry = {'status': cache['status'],
-                             'step': cache['step'],
+                             # 'step': cache['step'],
                              'score': cache['score'].tolist(),
                              'reward': cache['reward'].tolist(),
                              'returns': cache['returns'].tolist()}
@@ -192,6 +192,7 @@ class Agent (OptionsModule):
         self.push = self.stop = None
 
         self.data = self.container()
+        self._results = self.manager.OnlineResults()
 
         # Initialize Environments
         with RedirectStream():
@@ -458,7 +459,7 @@ class Agent (OptionsModule):
             self.io_queue = self.pool.queue
             self.pool.apply_async(target=io_loop, parameters=[self.io_lock, log])
 
-        self._results = results or self.manager.OnlineResults()
+        self._results = results or self._results
 
         # --------------------------------------------------------------------------------
         # Loop
