@@ -46,8 +46,8 @@ class Trainer (Module):
     # Loading / Saving
     # e.g. /results/narldiff/{group}/001-spring-green
     load_model: str = ''
-    save_model: int = 500
-    rollout: int = 500
+    save_every: int = 5000
+    rollout: int = 5000
     max_episodes: Optional[int] = None
     results_dir: str = 'results'
     tags: list[str] = []
@@ -293,7 +293,7 @@ class Trainer (Module):
 
     def train_step_complete(self):
         self.log_metrics()
-        if self.progress.modulo('session', self.save_model, dest='save', gt=self.save_model):
+        if self.progress.modulo('session', self.save_every, dest='save', gt=self.save_every):
             self.save()
         self.progress.step('train')
         self.progress.step('session')

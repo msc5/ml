@@ -411,7 +411,7 @@ class Agent (OptionsModule):
             cache['status'] = vals['status'] = 'complete'
 
             # Collect completed episode
-            self.dead[self.alive[env]] = vals
+            self.dead[self.alive[env]] = cache
             self._results.set_complete(env)
 
             actor.after(cache, env)
@@ -484,7 +484,6 @@ class Agent (OptionsModule):
                     self.save(env)
                 break
 
-        self.dead['mean'], self.dead['std'] = self.stat(self.dead)
         self._results.reset_current()
         self._results.reset_history()
         return self.dead

@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import os
 import random
 from typing import Iterable, Literal, Optional
@@ -19,6 +20,7 @@ from ..util import RedirectStream
 class OfflineDataset (OptionsModule):
 
     debug: bool = False
+    profile: bool = False
     device: Literal['cuda', 'cpu'] = 'cuda'
     reload: bool = False
 
@@ -32,11 +34,6 @@ class OfflineDataset (OptionsModule):
 
     data: dict = {}
     stats: dict = {}
-
-    # def _build(self):
-    #     if self.environment is not None:
-    #         section('Building', module='Dataset', color='green')
-    #     return super()._build()
 
     def _track(self, iterable: Iterable, description: str = ''):
         if self.debug:
