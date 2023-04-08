@@ -11,7 +11,7 @@ from .src.cli import *
 from .src.mp import *
 
 # Util
-from .src.func import misc, loss
+from .src.func import misc, loss, dist
 
 # RL
 from .src.data import *
