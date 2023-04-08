@@ -18,8 +18,17 @@ class OnlineDataset (OfflineDataset):
         self.metrics = Dot({'size': len(self)})
 
     def __len__(self):
+        return self.num_episodes()
+
+    def num_episodes(self):
         if 'indices' in self.buffer:
             return len(self.buffer['indices'])
+        else:
+            return 0
+
+    def num_steps(self):
+        if 'X' in self.buffer:
+            return len(self.buffer['X'])
         else:
             return 0
 
@@ -40,11 +49,11 @@ class OnlineDataset (OfflineDataset):
         for _, result in episode.items():
 
             # Create tensors from episode
-            X = torch.stack(result['X']).cpu()
-            A = torch.stack(result['A']).cpu()
-            R = torch.tensor(result['reward'] + [self.terminal_penalty])[:, None].cpu()
-            TM = torch.tensor([False] * len(result['reward']) + [True])[:, None].cpu()
-            TO = torch.tensor([False] * len(TM))[:, None].cpu()
+            X = torch.stack(result['X']).cpu().to(torch.float32)
+            A = torch.stack(result['A']).cpu().to(torch.float32)
+            R = torch.tensor(result['reward'] + [self.terminal_penalty])[:, None].cpu().to(torch.float32)
+            TM = torch.tensor([False] * len(result['reward']) + [True])[:, None].cpu().to(torch.bool)
+            TO = torch.tensor([False] * len(TM))[:, None].cpu().to(torch.bool)
             if len(R) >= self.max_length:
                 TO[self.max_length - 1] = True
 
@@ -54,14 +63,14 @@ class OnlineDataset (OfflineDataset):
             # Add new episode to buffer
             if self.buffer == {}:
                 self.buffer: dict = {
-                        'X': X,
-                        'A': A,
-                        'R': R,
-                        'TM': TM,
-                        'TO': TO,
-                        'lengths': [length],
-                        'indices': [indices]
-                        }
+                    'X': X,
+                    'A': A,
+                    'R': R,
+                    'TM': TM,
+                    'TO': TO,
+                    'lengths': [length],
+                    'indices': [indices]
+                }
             else:
                 self.buffer['X'] = torch.cat([X, self.buffer['X'][:self.buffer_size]], dim=0)
                 self.buffer['A'] = torch.cat([A, self.buffer['A'][:self.buffer_size]], dim=0)
@@ -78,7 +87,7 @@ class OnlineDataset (OfflineDataset):
         Sample 'batch_size' single-timestep data.
         """
 
-        if len(self) < batch_size:
+        if len(self.buffer['X']) < batch_size:
             raise Exception('Size too small to sample this batch size')
 
         indices = torch.randint(0, len(self.buffer['X']) - 1, size=(batch_size,))
@@ -86,4 +95,3 @@ class OnlineDataset (OfflineDataset):
         sample['N'] = self.buffer['X'][indices + 1]
 
         return Dot(sample)
-        

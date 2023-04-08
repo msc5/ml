@@ -10,6 +10,9 @@ from .src.dot import *
 from .src.cli import *
 from .src.mp import *
 
+# Util
+from .src.func import misc, loss
+
 # RL
 from .src.data import *
 from .src.agent import *
