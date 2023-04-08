@@ -13,6 +13,10 @@ class OnlineDataset (OfflineDataset):
 
     buffer_size: int = 10000
 
+    def build(self):
+        super().build()
+        self.metrics = Dot({'size': len(self)})
+
     def __len__(self):
         if 'indices' in self.buffer:
             return len(self.buffer['indices'])
@@ -66,6 +70,8 @@ class OnlineDataset (OfflineDataset):
                 self.buffer['TO'] = torch.cat([TO, self.buffer['TO'][:self.buffer_size]], dim=0)
                 self.buffer['lengths'] = [length] + self.buffer['lengths'][:self.buffer_size]
                 self.buffer['indices'] = [indices] + self.buffer['indices'][:self.buffer_size]
+
+            self.metrics.size = len(self)
 
     def sample_step(self, batch_size: int = 1) -> Dot:
         """

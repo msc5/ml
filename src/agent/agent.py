@@ -389,7 +389,13 @@ class Agent (OptionsModule):
             done = True
         return done
 
-    def episode_step(self, env: int, actor: Actor, render: bool = True, **kwargs):
+    def episode_step(self,
+                     env: int,
+                     actor: Actor,
+                     render: bool = True,
+                     collect_results: bool = True,
+                     **kwargs):
+
         action = self.data['A'][env]
         data = self.step(env, action, render=render, **kwargs)
         cache = cast(dict, self.cache[env])
@@ -405,15 +411,17 @@ class Agent (OptionsModule):
 
         # Sync to shared struct
         keys = ['score', 'reward', 'returns', 'steps', 'status', 'environment', 'episode']
-        vals = {key: self.get_last(val) for key, val in cache.items() if key in keys}
-        self._results.set_current(env, vals)
+        if collect_results:
+            vals = {key: self.get_last(val) for key, val in cache.items() if key in keys}
+            self._results.set_current(env, vals)
 
         if self.episode_is_done(env):
-            cache['status'] = vals['status'] = 'complete'
+            cache['status'] = 'complete'
 
             # Collect completed episode
             self.dead[self.alive[env]] = cache
-            self._results.set_complete(env)
+            if collect_results:
+                self._results.set_complete(env)
 
             actor.after(cache, env)
             self.save(env)
@@ -425,6 +433,7 @@ class Agent (OptionsModule):
                 episodes: Optional[int] = None,
                 dir: Optional[str] = None,
                 results: Optional[OnlineResults] = None,
+                collect_results: bool = True,
                 log: bool = False,
                 render: bool = True,
                 stop: Optional[threading.Event] = None,
@@ -476,7 +485,7 @@ class Agent (OptionsModule):
                 self.data['A'][env] = action[act].cpu()
 
             for env in list(self.alive):
-                self.episode_step(env, actor, render, **kwargs)
+                self.episode_step(env, actor, render=render, **kwargs)
 
             self.steps.total += 1
 
@@ -485,8 +494,9 @@ class Agent (OptionsModule):
                     self.save(env)
                 break
 
-        self._results.reset_current()
-        self._results.reset_history()
+        if collect_results:
+            self._results.reset_current()
+            self._results.reset_history()
         return self.dead
 
     def close(self):
