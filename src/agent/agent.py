@@ -1,18 +1,14 @@
-from collections import defaultdict
 import os
 import threading
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 import imageio
 import numpy as np
 import torch
 
-from .. import plots as pp
 from ..cli import console
-from ..dot import Dot
 from ..options import OptionsModule
 from ..renderables import check, section
-from ..shared import OnlineResults
 from ..util import Metadata, RedirectStream
 from .wrappers import Wrapper
 from ..data import OnlineDataset
@@ -43,7 +39,7 @@ class Agent (OptionsModule):
 
         from ..mp import get_current_manager
         self.manager = get_current_manager()
-        self._results = self.manager.OnlineResults()
+        self.results = self.manager.OnlineResults()
 
         # Number of environments to run in parallel
         self.parallel_envs = max(1, self.parallel_envs)
@@ -59,6 +55,7 @@ class Agent (OptionsModule):
             self.dir = os.path.join(CurrentTrainer.dir, 'agent')
             if not os.path.exists(self.dir):
                 os.makedirs(self.dir)
+            self.results = CurrentTrainer._online_results
 
         self.p_episode = 0
 
@@ -70,6 +67,8 @@ class Agent (OptionsModule):
         # Reset live environment
         self.states[env] = self.envs[env].reset()
         self.frames[env] = []
+        self.scores[env] = {'returns': 0.0, 'score': 0.0}
+        self.steps[env] = 0
 
         return self.states[env]
 
@@ -81,12 +80,17 @@ class Agent (OptionsModule):
         # Reset step data
         self.states = torch.zeros((self.parallel_envs, self.x_size), dtype=torch.float32)
         self.frames = {env: [] for env in self.envs}
+        self.scores = {env: {'returns': 0.0, 'score': 0.0} for env in self.envs}
+        self.steps = {env: 0 for env in self.envs}
 
         # Reset all environments
         for env in self.envs:
             self.reset_env(env)
 
-    def save(self, env: int, fps: int = 60, **_):
+        if self.results is not None:
+            self.results.reset_current()
+
+    def save(self, env: int, complete: bool = True, fps: int = 60, **_):
 
         name = f'episode_{self.p_episode}'
         file = os.path.join(self.dir, name)
@@ -98,6 +102,9 @@ class Agent (OptionsModule):
         imageio.mimwrite(file + '.mp4', render, fps=fps)
         imageio.mimwrite(file + '.gif', render, fps=fps)
 
+        with Metadata(self.dir) as meta:
+            meta.data[self.p_episode] = {**self.scores[env], 'steps': self.steps[env], 'complete': complete}
+
         self.p_episode += 1
 
     def step(self,
@@ -107,6 +114,7 @@ class Agent (OptionsModule):
              render: bool = False,
              buffer: bool = True,
              save: bool = False,
+             results: bool = False,
              **kwargs):
         """
         Steps an environment forward using action and collects data.
@@ -127,17 +135,27 @@ class Agent (OptionsModule):
 
         # Step environment forward
         data['N'], data['R'], data['T'] = self.envs[env].step(data['A'].squeeze())
+        self.steps[env] += 1
+
+        # Track scores
+        self.scores[env]['returns'] += data['R'].item()
+        self.scores[env]['score'] = cast(float, self.envs[0].score(self.scores[env]['returns']))
+        if self.results is not None:
+            self.results.set_current(env, {'steps': self.steps[env], **self.scores[env]})
 
         # Push step data to buffer
         if buffer:
             self.buffer.push(data)
 
+        # Episode completed
         if data['T']:
             if save:
                 self.save(env, **kwargs)
+            if results and self.results is not None:
+                self.results.set_complete(env)
             self.reset_env(env)
 
-        return data['T']
+        return data['T'].item()
 
     @torch.no_grad()
     def run_steps(self,
@@ -146,7 +164,7 @@ class Agent (OptionsModule):
                   stop: Optional[threading.Event] = None,
                   **kwargs):
         """
-        Runs an episode on the environment. Optionally uses an Actor.
+        Runs "n_steps" in the environment. Optionally uses an Actor.
         """
 
         self.reset()
@@ -173,43 +191,53 @@ class Agent (OptionsModule):
                      stop: Optional[threading.Event] = None,
                      **kwargs):
         """
-        Runs an episode on the environment. Optionally uses an Actor.
+        Runs "n_episodes" episodes in the environment. Optionally uses an Actor.
         """
 
         self.reset()
 
         alive = list(self.envs)
-        todo = list(range(self.parallel_envs, n_episodes))
+        p_episodes = self.parallel_envs
 
         while alive:
 
             # Generate actions for environments that are still alive
             actions = actor(self.states[alive])
 
-            print(self.states[alive].shape)
-            print(actions.shape)
-
             # Step environments
-            dones = []
-            for env in list(alive):
-                done = self.step(env, self.states[alive][env], actions[env],
-                                 render=render, buffer=buffer, save=save,
-                                 **kwargs)
-                dones.append(done)
+            terminate = []
+            for i in range(len(alive)):
 
-            # Replace or discard completed episodes
-            for i, done in enumerate(dones):
+                # Select states and actions
+                env = alive[i]
+                action = actions[i]
+                state = self.states[alive][i]
+
+                done = self.step(env, state, action,
+                                 render=render, buffer=buffer, save=save, results=True,
+                                 **kwargs)
+
                 if done:
-                    if todo:
-                        alive[i] = todo.pop(0)
+                    if p_episodes < n_episodes:
+                        terminate += [False]
+                        p_episodes += 1
                     else:
-                        alive.pop(i)
+                        terminate += [True]
+                else:
+                    terminate += [False]
+
+            # Discard completed episodes
+            alive = [alive[i] for i in range(len(alive)) if not terminate[i]]
 
             if stop is not None and stop.is_set():
                 if save:
                     for env in alive:
-                        self.save(env, **kwargs)
+                        self.save(env, complete=False, **kwargs)
                 break
+
+        if self.results is not None:
+            self.results.reset_current()
+            self.results.reset_history()
 
     def close(self):
         section('Exiting', module='Agent', color='yellow')

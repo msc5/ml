@@ -69,7 +69,7 @@ class Trainer (Module):
     _gpus: list
 
     # Private variables
-    _online_results: Optional[OnlineResults] = None
+    _online_results: OnlineResults
 
     # Renderables
     layout: Layout
@@ -120,6 +120,7 @@ class Trainer (Module):
         self.main_thread = Thread(main=True)
         self._logged = Layout()
         self.agent_table = Layout()
+        self._online_results = OnlineResults()
 
         g = Dot()
         g.repo = git.Repo(os.getcwd())  # type: ignore
@@ -495,7 +496,7 @@ class Trainer (Module):
             data = dict(sorted(data.items(), key=lambda x: -x[1]['score']))
             return data
 
-        tags = ['score', 'returns', 'steps', 'episode']
+        tags = ['score', 'returns', 'steps']
         cols = [t.capitalize() for t in tags]
         columns = (Column(col, ratio=1) for col in cols)
         table = Table(*columns, show_header=True, box=None, header_style='bold yellow')

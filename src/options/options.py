@@ -3,7 +3,6 @@ import abc
 import argparse
 from inspect import isclass
 import sys
-import time
 from typing import Any, Optional, cast, get_origin
 from rich.columns import Columns
 from rich.console import Group
@@ -15,7 +14,7 @@ from torch import nn
 
 from ..cli import console
 from ..dot import Dot, DotItem
-from ..renderables import Alive, Status
+from ..renderables import Status
 
 
 class Options (Dot):
