@@ -27,7 +27,7 @@ class OnlineResults:
         self.history[-1][env] = self.current.pop(env)
 
     def get_history(self):
-        return [run for run in self.history if run.get('complete', False)]
+        return [run for run in self.history[:-1]]
 
     def reset_history(self):
 

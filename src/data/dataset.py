@@ -29,21 +29,27 @@ class OfflineDataset (OptionsModule):
     terminal_penalty: float = -100.0
     max_length: int = 1000
     frame_size: int = 64
+    use_video: bool = False
 
     capacity: Optional[int] = None
 
-    indices: list[torch.Tensor]
-    stats: dict[str, dict[str, torch.Tensor]]
-
+    # Required
     X: torch.Tensor
     N: torch.Tensor
     A: torch.Tensor
     R: torch.Tensor
     T: torch.Tensor
     E: torch.Tensor
-    F: torch.Tensor
+
+    # Optional
     QP: torch.Tensor
     QV: torch.Tensor
+
+    # Generated
+    F: torch.Tensor
+    indices: list[torch.Tensor]
+    stats: dict[str, dict[str, torch.Tensor]]
+    meta: dict
 
     def _track(self, iterable: Iterable, description: str = ''):
         if self.debug:
@@ -57,18 +63,17 @@ class OfflineDataset (OptionsModule):
 
     def build(self):
 
-        self.path = os.path.join('datasets', self.environment)
-        if not os.path.exists(self.path):
-            os.makedirs(self.path)
+        self.keys = ['X', 'N', 'A', 'R', 'T', 'E', 'QP', 'QV']
+
+        self.dir = os.path.join('datasets', self.environment)
+        if not os.path.exists(self.dir):
+            os.makedirs(self.dir)
 
         if self.environment != '':
             self.load()
 
-    def keys(self):
-        yield from ('X', 'N', 'A', 'R', 'T', 'E', 'QP', 'QV')
-
     def items(self):
-        for key in self.keys():
+        for key in self.keys:
             yield (key, getattr(self, key, None))
 
     def save(self):
@@ -76,10 +81,15 @@ class OfflineDataset (OptionsModule):
         Saves compressed version of D4RL dataset to 'datasets/'
         """
 
-        Metadata.save(self.path, self.meta)
+        Metadata.save(self.dir, self.meta)
         for key, val in self.items():
-            file = os.path.join(self.path, f'{key}.pt')
+            file = os.path.join(self.dir, f'{key}.pt')
             torch.save(val, file, pickle_protocol=5)
+
+        for key in ('stats', 'indices', 'F'):
+            file = os.path.join(self.dir, f'{key}.pt')
+            if (val := getattr(self, key, None)) is not None:
+                torch.save(val, file, pickle_protocol=5)
 
     def load(self):
         """
@@ -87,10 +97,9 @@ class OfflineDataset (OptionsModule):
         exist, generates it.
         """
 
-        path = os.path.join('datasets', self.environment, 'data.pt')
-
         # Reload
-        if self.reload or not os.path.exists(path):
+        reloaded = False
+        if self.reload or not os.path.exists(self.dir):
 
             # Load from D4RL
             self.meta = {}
@@ -98,18 +107,22 @@ class OfflineDataset (OptionsModule):
             for key, val in d4rl.items():
                 setattr(self, key, val)
 
-            self.load_splits()
-            self.load_values()
-            # self.load_video()
-            self.load_stats()
-            self.save()
+            reloaded = True
 
         # Load from saved
         else:
-            self.meta = Metadata.load(self.path)
+            self.meta = Metadata.load(self.dir)
             for key, _ in self.items():
-                file = os.path.join(self.path, f'{key}.pt')
+                file = os.path.join(self.dir, f'{key}.pt')
                 setattr(self, key, torch.load(file))
+
+        self.load_splits()
+        self.load_values()
+        self.load_video()
+        self.load_stats()
+
+        if reloaded:
+            self.save()
 
     def load_splits(self):
         """
@@ -120,28 +133,36 @@ class OfflineDataset (OptionsModule):
             episodes:   list[list[int]]
         """
 
-        # Episode delimiters
-        terminals = self.T[:, None]
-        terminals += self.E[:, None]
+        path = os.path.join(self.dir, 'indices.pt')
 
-        # Set termination penalties
-        R = self.R[:, None]
-        penalty_timesteps = self.T & ~self.E
-        R[penalty_timesteps] += self.terminal_penalty
+        if os.path.exists(path):
+            self.indices = torch.load(path)
 
-        # Nonzero indices of terminals
-        terminals[-1] = True
-        ends = terminals.squeeze().nonzero()
+        else:
 
-        # Compute lengths of each episode
-        ends[1:] = ends[1:] - ends[:-1]
-        ends[0] = ends[0] + 1
+            # Episode delimiters
+            terminals = self.T[:, None]
+            terminals += self.E[:, None]
 
-        # Generate list of indices split by each episode
-        episodes = list(torch.arange(len(terminals)).split(tuple(ends)))
+            # Set termination penalties
+            R = self.R[:, None]
+            penalty_timesteps = self.T & ~self.E
+            R[penalty_timesteps] += self.terminal_penalty
 
-        self.indices = episodes
-        self.meta['lengths'] = [len(e) for e in episodes]
+            # Nonzero indices of terminals
+            terminals[-1] = True
+            ends = terminals.squeeze().nonzero()
+
+            # Compute lengths of each episode
+            ends[1:] = ends[1:] - ends[:-1]
+            ends[0] = ends[0] + 1
+
+            # Generate list of indices split by each episode
+            episodes = list(torch.arange(len(terminals)).split(tuple(ends)))
+
+            self.indices = episodes
+
+        self.meta['lengths'] = [len(e) for e in self.indices]
 
     def load_values(self):
         """
@@ -152,27 +173,35 @@ class OfflineDataset (OptionsModule):
             values:     [ size, 1 ]
         """
 
-        L, N = max(self.meta['lengths']), len(self.meta['lengths'])
-        x = self.R.split(self.meta['lengths'])
+        path = os.path.join(self.dir, 'V.pt')
 
-        # Pad with zeros
-        rewards = torch.zeros(len(x), L)
-        for i, episode in enumerate(x):
-            rewards[i, 0:len(episode)] = episode.squeeze()
+        if os.path.exists(path):
+            self.V = torch.load(path)
 
-        # Compute values
-        discounts = self.discount ** (torch.arange(0, L))
-        values = torch.zeros_like(rewards)
-        for t in self._track(range(L), description='Values'):
-            V = (rewards[:, t:] * discounts[:L - t]).sum(dim=1)
-            values[:, t] = V
+        else:
 
-        # Re-flatten values
-        values = torch.cat([values[i, :self.meta['lengths'][i]] for i in range(N)])
-        values = values[:, None]
-        assert len(values) == sum(self.meta['lengths'])
+            L, N = max(self.meta['lengths']), len(self.meta['lengths'])
+            x = self.R.split(self.meta['lengths'])
 
-        self.V = values
+            # Pad with zeros
+            rewards = torch.zeros(len(x), L)
+            for i, episode in enumerate(x):
+                rewards[i, 0:len(episode)] = episode.squeeze()
+
+            # Compute values
+            discounts = self.discount ** (torch.arange(0, L))
+            values = torch.zeros_like(rewards)
+            for t in self._track(range(L), description='Values'):
+                V = (rewards[:, t:] * discounts[:L - t]).sum(dim=1)
+                values[:, t] = V
+
+            # Re-flatten values
+            values = torch.cat([values[i, :self.meta['lengths'][i]] for i in range(N)])
+            values = values[:, None]
+            assert len(values) == sum(self.meta['lengths'])
+
+            self.V = values
+
         self.meta['discount'] = self.discount
 
     def load_stats(self):
@@ -187,62 +216,79 @@ class OfflineDataset (OptionsModule):
             type:      torch.dtype
         """
 
-        stats = {}
-        for key, val in self._track(self.items(), description='Computing Stats'):
-            if isinstance(val, torch.Tensor):
+        path = os.path.join(self.dir, 'stats.pt')
 
-                # Collect shape
-                shape = val.shape
-                dtype = val.dtype
-                x = val.flatten(0, -2)  # [ *, size ] -> [ batch, size ]
+        if os.path.exists(path):
+            self.stats = torch.load(path)
 
-                # Compute Ranges
-                (low, _), (high, _) = x.min(0), x.max(0)
+        else:
 
-                # Compute Moments
-                if x.is_floating_point():
-                    mean, std = x.mean(0), x.std(0)
-                else:
-                    mean, std = None, None
+            stats = {}
+            for key, val in self._track(self.items(), description='Computing Stats'):
+                if isinstance(val, torch.Tensor):
 
-                stats[key] = {'high': high, 'low': low,
-                              'mean': mean, 'std': std,
-                              'shape': shape, 'type': dtype}
+                    # Collect shape
+                    shape = val.shape
+                    dtype = val.dtype
+                    x = val.flatten(0, -2)  # [ *, size ] -> [ batch, size ]
 
-        self.stats = stats
+                    # Compute Ranges
+                    (low, _), (high, _) = x.min(0), x.max(0)
+
+                    # Compute Moments
+                    if x.is_floating_point():
+                        mean, std = x.mean(0), x.std(0)
+                    else:
+                        mean, std = None, None
+
+                    stats[key] = {'high': high, 'low': low,
+                                  'mean': mean, 'std': std,
+                                  'shape': shape, 'type': dtype}
+
+            self.stats = stats
 
     def load_video(self):
 
-        with RedirectStream():
-            env = gym.make(self.environment)
+        path = os.path.join(self.dir, 'F.pt')
 
-        n = len(self.QP)
-        frames = None
-        resize = Resize((self.frame_size, self.frame_size), antialias=True)
+        if not self.use_video:
+            return
 
-        for i in self._track(range(n), description='Rendering Frames'):
+        elif os.path.exists(path):
+            self.F = torch.load(path)
 
-            qp, qv = self.QP[i], self.QV[i]
-            env.set_state(qp, qv)
+        else:
 
-            height, width = 256, 256
             with RedirectStream():
-                frame = env.sim.render(height, width, camera_name='track', mode='offscreen')
-            frame = np.flip(frame, axis=0)
-            frame = torch.from_numpy(frame.copy())
-            frame = frame.to(torch.uint8)
-            frame = frame.permute(2, 0, 1)
+                env = gym.make(self.environment)
 
-            frame = crop(frame, top=64, left=64, width=128, height=192)
-            frame = resize(frame)
+            n = len(self.QP)
+            frames = None
+            resize = Resize((self.frame_size, self.frame_size), antialias=True)
 
-            if frames is None:
-                frames = torch.zeros((n, *frame.shape), dtype=torch.uint8)
+            for i in self._track(range(n), description='Rendering Frames'):
 
-            frames[i] = frame
+                qp, qv = self.QP[i], self.QV[i]
+                env.set_state(qp, qv)
 
-        assert frames is not None
-        self.F = frames
+                height, width = 256, 256
+                with RedirectStream():
+                    frame = env.sim.render(height, width, camera_name='track', mode='offscreen')
+                frame = np.flip(frame, axis=0)
+                frame = torch.from_numpy(frame.copy())
+                frame = frame.to(torch.uint8)
+                frame = frame.permute(2, 0, 1)
+
+                frame = crop(frame, top=64, left=64, width=128, height=192)
+                frame = resize(frame)
+
+                if frames is None:
+                    frames = torch.zeros((n, *frame.shape), dtype=torch.uint8)
+
+                frames[i] = frame
+
+            assert frames is not None
+            self.F = frames
 
     def normalize(self, x: torch.Tensor, key: Optional[str] = None):
         """

@@ -189,6 +189,7 @@ class Agent (OptionsModule):
                      buffer: bool = False,
                      save: bool = True,
                      stop: Optional[threading.Event] = None,
+                     results: bool = True,
                      **kwargs):
         """
         Runs "n_episodes" episodes in the environment. Optionally uses an Actor.
@@ -214,7 +215,8 @@ class Agent (OptionsModule):
                 state = self.states[alive][i]
 
                 done = self.step(env, state, action,
-                                 render=render, buffer=buffer, save=save, results=True,
+                                 render=render, buffer=buffer,
+                                 save=save, results=results,
                                  **kwargs)
 
                 if done:
@@ -236,8 +238,8 @@ class Agent (OptionsModule):
                 break
 
         if self.results is not None:
-            self.results.reset_current()
             self.results.reset_history()
+            self.results.reset_current()
 
     def close(self):
         section('Exiting', module='Agent', color='yellow')

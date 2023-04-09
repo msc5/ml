@@ -138,8 +138,9 @@ class Metadata:
         self.data = default or {}
 
     @classmethod
-    def load(cls, path: str):
-        if os.path.exists(path):
+    def load(cls, dir: str):
+        if os.path.exists(dir):
+            path = os.path.join(dir, 'metadata.json')
             with open(path, 'r') as f:
                 data = json.load(f)
             return data
@@ -459,11 +460,6 @@ def cluster():
 
 class Steps:
 
-    # keys: list[str]
-    # steps: dict[str, int]
-    # timers: dict[str, Timer]
-    # mods: dict[str, dict]
-
     counters: dict
     moduli: dict
 
@@ -508,26 +504,26 @@ class Steps:
         return False
 
     def __rich__(self):
-        counters = Table(Column('Counter', ratio=1),
-                         Column('Steps', ratio=1),
-                         Column('Rate', ratio=3),
-                         show_header=True, box=None, header_style='bold yellow')
-        for key, counter in self.counters.items():
-            name = Text(key, style='blue')
-            steps = f'[yellow]{counter["steps"]:,}'
-            counters.add_row(name, steps, counter['timer']._render_rate())
 
-        moduli = Table(Column('Modulus', ratio=1),
-                       Column('Steps', ratio=1),
-                       Column('Every', ratio=1),
-                       show_header=True, box=None, header_style='bold yellow')
+        table = Table(Column('Name', ratio=1),
+                      Column('Steps', ratio=1),
+                      Column('Info', ratio=3),
+                      show_header=True, box=box.ROUNDED,
+                      style='black', header_style='bold yellow')
+
+        for key, counter in self.counters.items():
+            name = Text(key, style='magenta')
+            steps = f'[magenta]{counter["steps"]:,}'
+            info = counter['timer']._render_rate()
+            table.add_row(name, steps, info)
+
         for key, modulus in self.moduli.items():
             name = Text(key, style='blue')
-            steps = f'[yellow]{modulus["steps"]:,}'
-            every = f'[magenta]{modulus["every"]:,}'
-            moduli.add_row(name, steps, every)
+            steps = f'[blue]{modulus["steps"]:,}'
+            info = f'[white]Every [reset][blue]{modulus["every"]:,}[reset][white] steps'
+            table.add_row(name, steps, info)
 
-        return Panel(Group(counters, moduli), border_style='black')
+        return table
 
 
 class System:
@@ -585,11 +581,20 @@ class System:
         self._update()
         self._update_progress()
 
-        table = Table(Column('Device', vertical='middle'), 'Stat', box=box.ROUNDED, style='black')
-
+        panels = []
         for device, progress in self.progress.items():
-            label = Text(device, style='bold magenta')
-            panel = Panel(progress, border_style='black')
-            table.add_row(label, panel)
+            panels += [Panel(progress, title=device, title_align='left', border_style='black')]
 
-        yield table
+        group = Group(*panels)
+        yield group
+
+
+class Loss:
+
+    losses: dict
+
+    def __init__(self) -> None:
+        self.losses = {}
+
+    def add(self, name: str, loss: torch.Tensor):
+        self.losses[name] = loss

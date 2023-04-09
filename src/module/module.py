@@ -178,13 +178,14 @@ class Module (OptionsModule, nn.Module):
 
         for name, child in self.named_children():
             if isinstance(child, Module) and not child._hide_grads and not child._hide_module:
-                module = Text('( ' + child.__class__.__name__ + ' )', style='blue')
                 if child._is_common:
                     heading = Text(name, style='yellow')
+                    module = Text(child.__class__.__name__, style='italic yellow')
                     table.add_row(heading, module, child._render_device(), child._render())
                 else:
                     heading = [Text(name, style='bold cyan')]
-                    heading = Columns([*heading, module, child._render_params()], padding=(0, 2))
+                    heading += [Text(child.__class__.__name__, style='italic cyan')]
+                    heading = Columns([*heading, child._render_params()], padding=(0, 2))
                     panel = Group(heading, child._render())
                     uncommons.append(panel)
 

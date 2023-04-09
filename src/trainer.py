@@ -153,7 +153,7 @@ class Trainer (Module):
         with Metadata(self.results_dir) as meta:
             meta.data['number'] = number = meta.data.get('number', 0) + 1
         self.name = f'{number:03d}-{self.group if self.group != "misc" else generate_name()}'
-        self.dir = os.path.join(self.results_dir, self.opts.sys.module, self.group, self.name)
+        self.dir = os.path.join(self.results_dir, self.opts.sys.module, self.name)
         check(f'Created Directory [cyan]{self.dir}[reset]')
 
         # with Live(get_renderable=self._render_building, transient=True):
@@ -191,13 +191,13 @@ class Trainer (Module):
                 meta.data['wandb'] = self.run.id
         check('Saved Options and Configuration')
 
-        if 'train' in self.opts.mode:
-            ln_source = os.path.join(os.getcwd(), self.dir)
-            ln_dest = os.path.join(self.results_dir, self.opts.sys.module, self.group, 'latest')
-            if os.path.exists(ln_dest):
-                os.unlink(ln_dest)
-            os.symlink(ln_source, ln_dest)
-            check(f'Created symlink at [cyan]{ln_dest}[reset] from [cyan]{ln_source}[reset]')
+        # if 'train' in self.opts.mode:
+        #     ln_source = os.path.join(os.getcwd(), self.dir)
+        #     ln_dest = os.path.join(self.results_dir, self.opts.sys.module, self.group, 'latest')
+        #     if os.path.exists(ln_dest):
+        #         os.unlink(ln_dest)
+        #     os.symlink(ln_source, ln_dest)
+        #     check(f'Created symlink at [cyan]{ln_dest}[reset] from [cyan]{ln_source}[reset]')
 
         check('Finished')
 
