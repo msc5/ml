@@ -183,8 +183,6 @@ class Agent (OptionsModule):
 
         while alive:
 
-            breakpoint()
-
             # Generate actions for environments that are still alive
             actions = actor(self.states[alive])
 
@@ -194,7 +192,7 @@ class Agent (OptionsModule):
             # Step environments
             dones = []
             for env in list(alive):
-                done = self.step(env, self.states[alive], actions,
+                done = self.step(env, self.states[alive][env], actions[env],
                                  render=render, buffer=buffer, save=save,
                                  **kwargs)
                 dones.append(done)
