@@ -47,7 +47,7 @@ class Trainer (Module):
     # e.g. /results/narldiff/{group}/001-spring-green
     load_model: str = ''
     save_every: int = 5000
-    rollout: int = 5000
+    rollout_every: int = 5000
     max_episodes: Optional[int] = None
     results_dir: str = 'results'
     tags: list[str] = []
@@ -115,7 +115,8 @@ class Trainer (Module):
     def _reset(self):
         self._loops = []
         self.timer = Timer()
-        self.progress = Steps(keys=['session', 'train', 'save', 'rollout'])
+        self.progress = Steps(keys=['session'])
+        self.progress.add_modulo('save', every=self.save_every)
         self.system = System()
         self.main_thread = Thread(main=True)
         self._logged = Layout()
@@ -293,7 +294,7 @@ class Trainer (Module):
 
     def train_step_complete(self):
         self.log_metrics()
-        if self.progress.modulo('session', self.save_every, dest='save', gt=self.save_every):
+        if self.progress.modulo('session', 'save'):
             self.save()
         self.progress.step('train')
         self.progress.step('session')
@@ -495,7 +496,7 @@ class Trainer (Module):
             data = dict(sorted(data.items(), key=lambda x: -x[1]['score']))
             return data
 
-        tags = ['score', 'returns', 'steps']
+        tags = ['score', 'returns', 'steps', 'episode']
         cols = [t.capitalize() for t in tags]
         columns = (Column(col, ratio=1) for col in cols)
         table = Table(*columns, show_header=True, box=None, header_style='bold yellow')
@@ -523,7 +524,7 @@ class Trainer (Module):
                 # Sort results by mean score
                 caches = sorted(enumerate(history), key=lambda x: -x[1].get('mean', 0))
                 for run, cache in caches[:5]:
-                    yield self._render_online_table(cache, name=f'Run {run} / {len(history)}')
+                    yield self._render_online_table(cache, name=f'Run {run + 1} / {len(history)}')
 
         else:
             yield Panel('No Results', border_style='red')

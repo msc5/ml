@@ -27,42 +27,42 @@ def env_worker(queues: dict[str, ManagedQueue], environment: str):
 
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-    with RedirectStream():
+    if 'breakout' in environment:
+        wrapper = AtariWrapper(environment)
+    else:
+        wrapper = GymWrapper(environment)
 
-        if 'breakout' in environment:
-            wrapper = AtariWrapper(environment)
-        else:
-            wrapper = GymWrapper(environment)
+    while True:
 
-        while True:
+        function, input = queues['in'].get()
+        if function is None and input is None:
+            wrapper.close()
+            return
 
-            function, input = queues['in'].get()
-            if function is None and input is None:
-                wrapper.close()
-                return
+        try:
+            if function == 'reset':
+                output = wrapper.reset()
+            elif function == 'step':
+                output = wrapper.step(input.clone())
+            elif function == 'render':
+                output = wrapper.render()
+            elif function == 'score':
+                output = wrapper.score(input)
+            elif function == 'sample_action':
+                output = wrapper.sample_action()
+            elif function == 'spaces':
+                output = wrapper.spaces()
+            else:
+                raise Exception('Invalid function')
 
-            try:
-                if function == 'reset':
-                    output = wrapper.reset()
-                elif function == 'step':
-                    output = wrapper.step(input.clone())
-                elif function == 'render':
-                    output = wrapper.render()
-                elif function == 'score':
-                    output = wrapper.score(input)
-                elif function == 'sample_action':
-                    output = wrapper.sample_action()
-                else:
-                    raise Exception('Invalid function')
+            queues['out'].put(output)
+            del function
+            del input
+            del output
 
-                queues['out'].put(output)
-                del function
-                del input
-                del output
-
-            except:
-                wrapper.close()
-                return
+        except:
+            wrapper.close()
+            return
 
 
 class Wrapper:
@@ -98,12 +98,11 @@ class Wrapper:
         return result
 
     def render(self, height: int = 256, width: int = 256):
-        with RedirectStream():
-            self.in_queue.put(('render', (height, width)))
-            output = self.out_queue.get()
-            result = output.clone()
-            del output
-            return result
+        self.in_queue.put(('render', (height, width)))
+        output = self.out_queue.get()
+        result = output.clone()
+        del output
+        return result
 
     def sample_action(self) -> torch.Tensor:
         self.in_queue.put(('sample_action', None))
@@ -119,11 +118,21 @@ class Wrapper:
         del output
         return result
 
+    def spaces(self):
+        self.in_queue.put(('spaces', None))
+        output = self.out_queue.get()
+        result = copy.deepcopy(output)
+        del output
+        return result
+
 
 class GymWrapper (gym.Env):
 
     env: str
     sim: mjc.MjSim
+
+    x_size: int
+    a_size: int
 
     def __init__(self, environment: str):
 
@@ -134,14 +143,12 @@ class GymWrapper (gym.Env):
 
         self.env = environment
         self.sim = self._env.sim  # type: ignore
-        self.action_space = self._env.action_space
 
-        if isinstance(self.action_space, Discrete):
-            self.a = self.action_space.n
-        elif isinstance(self.action_space, Box):
-            (self.a, ) = self.action_space.shape
-        else:
-            raise NotImplementedError()
+        self.action_space = self._env.action_space
+        self.observation_space = self._env.action_space
+
+        (self.a_size, ) = self._env.action_space.shape
+        (self.x_size, ) = self._env.observation_space.shape
 
     def state(self) -> torch.Tensor:
         # if 'walker' in self.env:
@@ -168,7 +175,7 @@ class GymWrapper (gym.Env):
     def sample_action(self) -> torch.Tensor:
         action = self.action_space.sample()
         if isinstance(self.action_space, Discrete):
-            action = torch.zeros((2, self.a))
+            action = torch.zeros((2, self.a_size))
             action[0, action] = 1
         else:
             action = torch.from_numpy(action.copy())
@@ -193,6 +200,9 @@ class GymWrapper (gym.Env):
 
     def score(self, returns) -> float:
         return self._env.env.get_normalized_score(returns)  # type: ignore
+
+    def spaces(self):
+        return [self.x_size, self.a_size]
 
 
 class AtariWrapper (OptionsModule, gym.Env):
@@ -238,3 +248,6 @@ class AtariWrapper (OptionsModule, gym.Env):
 
     def score(self, _) -> float:
         return 0.0
+
+    def spaces(self):
+        return (self.action_space, self.observation_space)

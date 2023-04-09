@@ -9,7 +9,7 @@ import termios
 import threading
 import time
 import tracemalloc
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional, Union
 
 import ctypes
 
@@ -17,7 +17,7 @@ import GPUtil
 import psutil
 from pyfzf.pyfzf import FzfPrompt
 from rich import box
-from rich.console import Console, group
+from rich.console import Console, Group, group
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
 from rich.table import Column
@@ -49,11 +49,11 @@ def makedir(path: str):
     if not os.path.exists(path): os.makedirs(path)
 
 
-# @cl.contextmanager
-# def quiet():
-#     with open(os.devnull, 'w') as null:
-#         with cl.redirect_stdout(null), cl.redirect_stderr(null):
-#             yield None
+@cl.contextmanager
+def quiet():
+    with open(os.devnull, 'w') as null:
+        with cl.redirect_stdout(null), cl.redirect_stderr(null):
+            yield None
 
 
 class RedirectStream (object):
@@ -452,59 +452,75 @@ def cluster():
 
 class Steps:
 
-    keys: list[str]
-    steps: dict[str, int]
-    last: dict[str, int]
-    timers: dict[str, Timer]
+    # keys: list[str]
+    # steps: dict[str, int]
+    # timers: dict[str, Timer]
+    # mods: dict[str, dict]
 
-    def __init__(self, keys: Iterable[str]) -> None:
-        self.keys = list(keys)
-        self.steps = {key: 0 for key in keys}
-        self.last = {key: 0 for key in keys}
-        self.timers = {key: Timer() for key in keys}
+    counters: dict
+    moduli: dict
+
+    def __init__(self, keys: Optional[Iterable[str]] = None) -> None:
+        self.counters = {}
+        self.moduli = {}
+        if keys is not None:
+            for key in keys:
+                self.add(key)
 
     def add(self, key: str):
-        if not key in self.keys:
-            self.keys.append(key)
-            self.steps[key] = 0
-            self.last[key] = 0
-            self.timers[key] = Timer()
+        if not key in self.counters:
+            self.counters[key] = {'timer': Timer(), 'steps': 0}
+
+    def add_modulo(self, key: str, every: int = 1, gt: int = -1):
+        if not key in self.moduli:
+            self.moduli[key] = {'every': every, 'gt': gt, 'steps': 0}
 
     def get(self, key: str):
-        if key in self.keys:
-            return self.steps[key]
-        return 0
+        if key in self.counters:
+            return self.counters[key]['steps']
+        else:
+            return 0
 
     def step(self, key: str):
-        if key in self.keys:
-            self.steps[key] += 1
-            self.timers[key](step=True)
+        if key in self.counters:
+            self.counters[key]['steps'] += 1
+            self.counters[key]['timer'](step=True)
 
-    def modulo(self, key: str, mod: int, gt: int = -1, dest: Optional[str] = None):
-        if key in self.keys:
-            step = self.steps[key]
-            if step % mod == 0 and step > gt:
-                if dest is not None and dest in self.keys:
-                    self.steps[dest] += 1
-                    self.last[dest] = self.steps[key]
-                    self.timers[dest](step=True)
-                else:
-                    self.last[key] = self.steps[key]
+    def modulo(self, key: str, dest: str):
+        if key in self.counters and dest in self.moduli:
+
+            # Get relevant information
+            every, gt = self.moduli[dest]['every'], self.moduli[dest]['gt']
+            step = self.counters[key]['steps']
+
+            # Check if modulus condition is met
+            if step % every == 0 and step > gt:
+                self.moduli[dest]['steps'] += 1
                 return True
+
         return False
 
     def __rich__(self):
-        table = Table(Column('Key', ratio=1),
-                      Column('Steps', ratio=1),
-                      Column('Last', ratio=1),
-                      Column('Rate', ratio=3),
-                      show_header=True, box=box.ROUNDED, style='black')
-        for key in self.keys:
+        counters = Table(Column('Counter', ratio=1),
+                         Column('Steps', ratio=1),
+                         Column('Rate', ratio=3),
+                         show_header=True, box=None, header_style='bold yellow')
+        for key, counter in self.counters.items():
             name = Text(key, style='blue')
-            steps = f'[yellow]{self.steps[key]:,}'
-            last = f'[magenta]{self.last[key]:,}'
-            table.add_row(name, steps, last, self.timers[key]._render_rate())
-        return table
+            steps = f'[yellow]{counter["steps"]:,}'
+            counters.add_row(name, steps, counter['timer']._render_rate())
+
+        moduli = Table(Column('Modulus', ratio=1),
+                       Column('Steps', ratio=1),
+                       Column('Every', ratio=1),
+                       show_header=True, box=None, header_style='bold yellow')
+        for key, modulus in self.moduli.items():
+            name = Text(key, style='blue')
+            steps = f'[yellow]{modulus["steps"]:,}'
+            every = f'[magenta]{modulus["every"]:,}'
+            moduli.add_row(name, steps, every)
+
+        return Panel(Group(counters, moduli), border_style='black')
 
 
 class System:

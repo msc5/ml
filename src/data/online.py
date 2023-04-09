@@ -15,7 +15,7 @@ class OnlineDataset (OfflineDataset):
 
     def build(self):
         super().build()
-        self.metrics = Dot({'size': len(self)})
+        self.metrics = Dot({'steps': self.num_steps(), 'episodes': self.num_episodes()})
 
     def __len__(self):
         return self.num_episodes()
@@ -80,7 +80,8 @@ class OnlineDataset (OfflineDataset):
                 self.buffer['lengths'] = [length] + self.buffer['lengths'][:self.buffer_size]
                 self.buffer['indices'] = [indices] + self.buffer['indices'][:self.buffer_size]
 
-            self.metrics.size = len(self)
+            self.metrics.steps = self.num_steps()
+            self.metrics.episodes = self.num_episodes()
 
     def sample_step(self, batch_size: int = 1) -> Dot:
         """
