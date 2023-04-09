@@ -26,7 +26,7 @@ class OnlineDataset (OptionsModule):
         self.p = 0
         self.n = 0
 
-    def fields(self):
+    def items(self):
         yield ('X', self.X)
         yield ('N', self.N)
         yield ('A', self.A)
@@ -34,7 +34,7 @@ class OnlineDataset (OptionsModule):
         yield ('T', self.T)
 
     def __get_item__(self, i: int):
-        return {key: val[i] for key, val in self.fields()}
+        return {key: val[i] for key, val in self.items()}
 
     def __len__(self):
         return self.n
@@ -44,7 +44,7 @@ class OnlineDataset (OptionsModule):
         Add step to online RL dataset.
         """
 
-        for key, val in self.fields():
+        for key, val in self.items():
             val[self.p % self.buffer_size] = data[key]
 
         self.p += 1
@@ -59,6 +59,6 @@ class OnlineDataset (OptionsModule):
             raise Exception('Buffer too small to sample this batch size')
 
         indices = torch.randint(0, len(self) - 1, size=(batch_size, ))
-        sample = {key: field[indices] for key, field in self.fields()}
+        sample = {key: field[indices] for key, field in self.items()}
 
         return Dot(sample)

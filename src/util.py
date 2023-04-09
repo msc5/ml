@@ -146,6 +146,13 @@ class Metadata:
         else:
             return {}
 
+    @classmethod
+    def save(cls, dir: str, data: dict):
+        if os.path.exists(dir):
+            path = os.path.join(dir, 'metadata.json')
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=4, default=str)
+
     def __enter__(self):
         if os.path.exists(self.path):
             with open(self.path, 'r') as f:
