@@ -1,98 +1,64 @@
 import torch
 
-from .dataset import OfflineDataset
+from ..options import OptionsModule
 from ..dot import Dot
 
 
-class OnlineDataset (OfflineDataset):
+class OnlineDataset (OptionsModule):
     """
     A.K.A. "Replay Buffer"
     """
 
-    buffer: dict = {}
+    x_size: int
+    a_size: int
+    frame_shape: list[int]
 
-    buffer_size: int = 10000
+    buffer_size: int = int(1e6)
 
     def build(self):
-        super().build()
-        self.metrics = Dot({'steps': self.num_steps(), 'episodes': self.num_episodes()})
+
+        self.X = torch.zeros((self.buffer_size, self.x_size), dtype=torch.float32)
+        self.N = torch.zeros((self.buffer_size, self.x_size), dtype=torch.float32)
+        self.A = torch.zeros((self.buffer_size, self.a_size), dtype=torch.float32)
+        self.R = torch.zeros((self.buffer_size, 1), dtype=torch.float32)
+        self.T = torch.zeros((self.buffer_size, 1), dtype=torch.bool)
+
+        self.p = 0
+        self.n = 0
+
+    def fields(self):
+        yield ('X', self.X)
+        yield ('N', self.N)
+        yield ('A', self.A)
+        yield ('R', self.R)
+        yield ('T', self.T)
+
+    def __get_item__(self, i: int):
+        return {key: val[i] for key, val in self.fields()}
 
     def __len__(self):
-        return self.num_episodes()
+        return self.n
 
-    def num_episodes(self):
-        if 'indices' in self.buffer:
-            return len(self.buffer['indices'])
-        else:
-            return 0
-
-    def num_steps(self):
-        if 'X' in self.buffer:
-            return len(self.buffer['X'])
-        else:
-            return 0
-
-    def push(self, episode: dict) -> None:
+    def push(self, data: dict) -> None:
         """
-        Add episode to online RL dataset.
-        Inputs:
-            episode: {
-                env: {
-                    'score': float, normalized score,
-                    'reward': float, normalized rewards,
-                    'X': list(tensor[float32]), environment states,
-                    'A': list[tensor[float32]], environment actions
-                }
-            }
+        Add step to online RL dataset.
         """
 
-        for _, result in episode.items():
+        for key, val in self.fields():
+            val[self.p % self.buffer_size] = data[key]
 
-            # Create tensors from episode
-            X = torch.stack(result['X']).cpu().to(torch.float32)
-            A = torch.stack(result['A']).cpu().to(torch.float32)
-            R = torch.tensor(result['reward'] + [self.terminal_penalty])[:, None].cpu().to(torch.float32)
-            TM = torch.tensor([False] * len(result['reward']) + [True])[:, None].cpu().to(torch.bool)
-            TO = torch.tensor([False] * len(TM))[:, None].cpu().to(torch.bool)
-            if len(R) >= self.max_length:
-                TO[self.max_length - 1] = True
-
-            length = len(X)
-            indices = list(range(len(self), len(self) + length))
-
-            # Add new episode to buffer
-            if self.buffer == {}:
-                self.buffer: dict = {
-                    'X': X,
-                    'A': A,
-                    'R': R,
-                    'TM': TM,
-                    'TO': TO,
-                    'lengths': [length],
-                    'indices': [indices]
-                }
-            else:
-                self.buffer['X'] = torch.cat([X, self.buffer['X'][:self.buffer_size]], dim=0)
-                self.buffer['A'] = torch.cat([A, self.buffer['A'][:self.buffer_size]], dim=0)
-                self.buffer['R'] = torch.cat([R, self.buffer['R'][:self.buffer_size]], dim=0)
-                self.buffer['TM'] = torch.cat([TM, self.buffer['TM'][:self.buffer_size]], dim=0)
-                self.buffer['TO'] = torch.cat([TO, self.buffer['TO'][:self.buffer_size]], dim=0)
-                self.buffer['lengths'] = [length] + self.buffer['lengths'][:self.buffer_size]
-                self.buffer['indices'] = [indices] + self.buffer['indices'][:self.buffer_size]
-
-            self.metrics.steps = self.num_steps()
-            self.metrics.episodes = self.num_episodes()
+        self.p += 1
+        self.n = max(self.n, self.p)
 
     def sample_step(self, batch_size: int = 1) -> Dot:
         """
-        Sample 'batch_size' single-timestep data.
+        Sample 'batch_size' single-timestep batches.
         """
 
-        if len(self.buffer['X']) < batch_size:
-            raise Exception('Size too small to sample this batch size')
+        if len(self) < batch_size:
+            raise Exception('Buffer too small to sample this batch size')
 
-        indices = torch.randint(0, len(self.buffer['X']) - 1, size=(batch_size,))
-        sample = {key: self.buffer[key][indices] for key in ['X', 'A', 'R', 'TM']}
-        sample['N'] = self.buffer['X'][indices + 1]
+        indices = torch.randint(0, len(self) - 1, size=(batch_size, ))
+        sample = {key: field[indices] for key, field in self.fields()}
 
         return Dot(sample)

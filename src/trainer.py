@@ -80,7 +80,6 @@ class Trainer (Module):
 
     # Modules
     model: Module
-    dataset: OfflineDataset
 
     def _build(self):
         section('Building')
