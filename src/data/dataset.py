@@ -133,33 +133,24 @@ class OfflineDataset (OptionsModule):
             episodes:   list[list[int]]
         """
 
-        path = os.path.join(self.dir, 'indices.pt')
+        # Set termination penalties
+        self.R[:, None][self.T] += self.terminal_penalty
 
-        if os.path.exists(path):
-            self.indices = torch.load(path)
+        # Episode delimiters (Both terminals and timeouts)
+        terminals = (self.T | self.E)[:, None]
 
-        else:
+        # Nonzero indices of terminals
+        terminals[-1] = True
+        ends = terminals.squeeze().nonzero()
 
-            # Episode delimiters
-            terminals = self.T[:, None]
-            terminals += self.E[:, None]
+        # Compute lengths of each episode
+        ends[1:] = ends[1:] - ends[:-1]
+        ends[0] = ends[0] + 1
 
-            # Set termination penalties
-            penalty_timesteps = self.T & ~self.E
-            self.R[:, None][penalty_timesteps] += self.terminal_penalty
+        # Generate list of indices split by each episode
+        episodes = list(torch.arange(len(terminals)).split(tuple(ends)))
 
-            # Nonzero indices of terminals
-            terminals[-1] = True
-            ends = terminals.squeeze().nonzero()
-
-            # Compute lengths of each episode
-            ends[1:] = ends[1:] - ends[:-1]
-            ends[0] = ends[0] + 1
-
-            # Generate list of indices split by each episode
-            episodes = list(torch.arange(len(terminals)).split(tuple(ends)))
-
-            self.indices = episodes
+        self.indices = episodes
 
         self.meta['lengths'] = [len(e) for e in self.indices]
 
@@ -172,36 +163,27 @@ class OfflineDataset (OptionsModule):
             values:     [ size, 1 ]
         """
 
-        path = os.path.join(self.dir, 'V.pt')
+        L, N = max(self.meta['lengths']), len(self.meta['lengths'])
+        x = self.R.split(self.meta['lengths'])
 
-        # Load values
-        if os.path.exists(path):
-            self.V = torch.load(path)
+        # Pad with zeros
+        rewards = torch.zeros(len(x), L)
+        for i, episode in enumerate(x):
+            rewards[i, 0:len(episode)] = episode.squeeze()
 
-        # Compute Values
-        else:
+        # Compute values
+        discounts = self.discount ** (torch.arange(0, L))
+        values = torch.zeros_like(rewards)
+        for t in self._track(range(L), description='Values'):
+            V = (rewards[:, t:] * discounts[:L - t]).sum(dim=1)
+            values[:, t] = V
 
-            L, N = max(self.meta['lengths']), len(self.meta['lengths'])
-            x = self.R.split(self.meta['lengths'])
+        # Re-flatten values
+        values = torch.cat([values[i, :self.meta['lengths'][i]] for i in range(N)])
+        values = values[:, None]
+        assert len(values) == sum(self.meta['lengths'])
 
-            # Pad with zeros
-            rewards = torch.zeros(len(x), L)
-            for i, episode in enumerate(x):
-                rewards[i, 0:len(episode)] = episode.squeeze()
-
-            # Compute values
-            discounts = self.discount ** (torch.arange(0, L))
-            values = torch.zeros_like(rewards)
-            for t in self._track(range(L), description='Values'):
-                V = (rewards[:, t:] * discounts[:L - t]).sum(dim=1)
-                values[:, t] = V
-
-            # Re-flatten values
-            values = torch.cat([values[i, :self.meta['lengths'][i]] for i in range(N)])
-            values = values[:, None]
-            assert len(values) == sum(self.meta['lengths'])
-
-            self.V = values
+        self.V = values
 
         self.meta['discount'] = self.discount
 
@@ -217,46 +199,34 @@ class OfflineDataset (OptionsModule):
             type:      torch.dtype
         """
 
-        path = os.path.join(self.dir, 'stats.pt')
+        stats = {}
+        for key, val in self._track(self.items(), description='Computing Stats'):
+            if isinstance(val, torch.Tensor):
 
-        if os.path.exists(path):
-            self.stats = torch.load(path)
+                # Collect shape
+                shape = val.shape
+                dtype = val.dtype
+                x = val.flatten(0, -2)  # [ *, size ] -> [ batch, size ]
 
-        else:
+                # Compute Ranges
+                (low, _), (high, _) = x.min(0), x.max(0)
 
-            stats = {}
-            for key, val in self._track(self.items(), description='Computing Stats'):
-                if isinstance(val, torch.Tensor):
+                # Compute Moments
+                if x.is_floating_point():
+                    mean, std = x.mean(0), x.std(0)
+                else:
+                    mean, std = None, None
 
-                    # Collect shape
-                    shape = val.shape
-                    dtype = val.dtype
-                    x = val.flatten(0, -2)  # [ *, size ] -> [ batch, size ]
-
-                    # Compute Ranges
-                    (low, _), (high, _) = x.min(0), x.max(0)
-
-                    # Compute Moments
-                    if x.is_floating_point():
-                        mean, std = x.mean(0), x.std(0)
-                    else:
-                        mean, std = None, None
-
-                    stats[key] = {'high': high, 'low': low,
-                                  'mean': mean, 'std': std,
-                                  'shape': shape, 'type': dtype}
+                stats[key] = {'high': high, 'low': low,
+                              'mean': mean, 'std': std,
+                              'shape': shape, 'type': dtype}
 
             self.stats = stats
 
     def load_video(self):
 
-        path = os.path.join(self.dir, 'F.pt')
-
         if not self.use_video:
             return
-
-        elif os.path.exists(path):
-            self.F = torch.load(path)
 
         else:
 
