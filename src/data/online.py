@@ -26,6 +26,8 @@ class OnlineDataset (OptionsModule):
         self.p = 0
         self.n = 0
 
+        self.metrics = Dot({'steps': self.n})
+
     def items(self):
         yield ('X', self.X)
         yield ('N', self.N)
@@ -49,6 +51,8 @@ class OnlineDataset (OptionsModule):
 
         self.p += 1
         self.n = max(self.n, self.p)
+
+        self.metrics.steps = self.n
 
     def sample_step(self, batch_size: int = 1) -> Dot:
         """
