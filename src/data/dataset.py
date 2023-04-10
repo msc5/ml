@@ -97,32 +97,32 @@ class OfflineDataset (OptionsModule):
         exist, generates it.
         """
 
-        # Reload
-        reloaded = False
-        if self.reload or not os.path.exists(self.dir):
+        # # Reload
+        # reloaded = False
+        # if self.reload or not os.path.exists(self.dir):
 
-            # Load from D4RL
-            self.meta = {}
-            d4rl = make_d4rl_dataset(self.environment)
-            for key, val in d4rl.items():
-                setattr(self, key, val)
+        # Load from D4RL
+        self.meta = {}
+        d4rl = make_d4rl_dataset(self.environment)
+        for key, val in d4rl.items():
+            setattr(self, key, val)
 
-            reloaded = True
+        # reloaded = True
 
-        # Load from saved
-        else:
-            self.meta = Metadata.load(self.dir)
-            for key, _ in self.items():
-                file = os.path.join(self.dir, f'{key}.pt')
-                setattr(self, key, torch.load(file))
+        # # Load from saved
+        # else:
+        #     self.meta = Metadata.load(self.dir)
+        #     for key, _ in self.items():
+        #         file = os.path.join(self.dir, f'{key}.pt')
+        #         setattr(self, key, torch.load(file))
 
         self.load_splits()
         self.load_values()
         self.load_video()
         self.load_stats()
 
-        if reloaded:
-            self.save()
+        # if reloaded:
+        #     self.save()
 
     def load_splits(self):
         """
@@ -145,9 +145,8 @@ class OfflineDataset (OptionsModule):
             terminals += self.E[:, None]
 
             # Set termination penalties
-            R = self.R[:, None]
             penalty_timesteps = self.T & ~self.E
-            R[penalty_timesteps] += self.terminal_penalty
+            self.R[:, None][penalty_timesteps] += self.terminal_penalty
 
             # Nonzero indices of terminals
             terminals[-1] = True
@@ -175,9 +174,11 @@ class OfflineDataset (OptionsModule):
 
         path = os.path.join(self.dir, 'V.pt')
 
+        # Load values
         if os.path.exists(path):
             self.V = torch.load(path)
 
+        # Compute Values
         else:
 
             L, N = max(self.meta['lengths']), len(self.meta['lengths'])
