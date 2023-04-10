@@ -59,6 +59,8 @@ class Agent (OptionsModule):
 
         self.p_episode = 0
 
+        self.reset()
+
     def reset_env(self, env: int = 0):
         """
         Resets an environment.
@@ -162,13 +164,15 @@ class Agent (OptionsModule):
     def run_steps(self,
                   actor: Callable,
                   n_steps: int,
+                  # parallel_envs: Optional[int] = None,
                   stop: Optional[threading.Event] = None,
                   **kwargs):
         """
         Runs "n_steps" in the environment. Optionally uses an Actor.
         """
 
-        self.reset()
+        # parallel_envs = parallel_envs or self.parallel_envs
+        # i_envs = list(range(parallel_envs))
 
         for _ in range(n_steps):
 
@@ -238,9 +242,10 @@ class Agent (OptionsModule):
                         self.save(env, complete=False, **kwargs)
                 break
 
+        self.reset()
+
         if self.results is not None:
             self.results.reset_history()
-            self.results.reset_current()
 
     def close(self):
         section('Exiting', module='Agent', color='yellow')
