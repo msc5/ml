@@ -140,7 +140,7 @@ class Agent (OptionsModule):
 
         # Track scores
         self.scores[env]['returns'] += data['R'].item()
-        self.scores[env]['score'] = cast(float, self.envs[0].score(self.scores[env]['returns']))
+        self.scores[env]['score'] = cast(float, self.envs[env].score(self.scores[env]['returns']))
         if self.results is not None:
             self.results.set_current(env, {'steps': self.steps[env], **self.scores[env]})
 
