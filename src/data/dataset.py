@@ -46,6 +46,7 @@ class OfflineDataset (OptionsModule):
     QV: torch.Tensor
 
     # Generated
+    V: torch.Tensor
     F: torch.Tensor
     indices: list[torch.Tensor]
     stats: dict[str, dict[str, torch.Tensor]]
@@ -63,7 +64,7 @@ class OfflineDataset (OptionsModule):
 
     def build(self):
 
-        self.keys = ['X', 'N', 'A', 'R', 'T', 'E', 'QP', 'QV']
+        self.keys = ['X', 'N', 'A', 'R', 'T', 'E', 'V', 'QP', 'QV']
 
         self.dir = os.path.join('datasets', self.environment)
         if not os.path.exists(self.dir):
