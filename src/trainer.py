@@ -504,10 +504,13 @@ class Trainer (Module):
             row = (f'{format_float(run[tag])}' for tag in tags)
             table.add_row(*row)
 
-        if 'mean' in cache and 'std' in cache:
-            stats = f'[bold green]{cache["mean"]: 3.3f} ± {cache["std"]:3.3f}'
-            table.add_row(stats)
-        table = Panel(table, border_style=style, title=name, title_align='left')
+        scores = torch.Tensor([run.get('score', 0) for run in cache.values()])
+        mean = scores.mean().nan_to_num().item()
+        std = scores.std().nan_to_num().item()
+        stats = f'[bold green]{mean: 3.3f} ± {std:3.3f}'
+
+        group = Group(table, stats)
+        table = Panel(group, border_style=style, title=name, title_align='left')
 
         return table
 

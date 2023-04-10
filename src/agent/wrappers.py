@@ -199,7 +199,7 @@ class GymWrapper (gym.Env):
         self._env.close()
 
     def score(self, returns) -> float:
-        return self._env.env.get_normalized_score(returns)  # type: ignore
+        return 100 * self._env.env.get_normalized_score(returns)  # type: ignore
 
     def spaces(self):
         return [self.x_size, self.a_size]
