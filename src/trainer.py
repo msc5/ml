@@ -496,6 +496,7 @@ class Trainer (Module):
             data = dict(sorted(data.items(), key=lambda x: -x[1]['score']))
             return data
 
+        group = []
         tags = ['score', 'returns', 'steps']
         cols = [t.capitalize() for t in tags]
         columns = (Column(col, ratio=1) for col in cols)
@@ -503,13 +504,12 @@ class Trainer (Module):
         for run in ordered(cache).values():
             row = (f'{format_float(run[tag])}' for tag in tags)
             table.add_row(*row)
+        group += [table]
 
-        scores = torch.Tensor([run.get('score', 0) for run in cache.values()])
-        mean = scores.mean().nan_to_num().item()
-        std = scores.std().nan_to_num().item()
-        stats = f'[bold green]{mean: 3.3f} ± {std:3.3f}'
+        if 'mean' in cache and 'std' in cache:
+            group += [f'[bold green]{cache["mean"]: 3.3f} ± {cache["std"]:3.3f}']
 
-        group = Group(table, stats)
+        group = Group(*group)
         table = Panel(group, border_style=style, title=name, title_align='left')
 
         return table

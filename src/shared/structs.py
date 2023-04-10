@@ -35,6 +35,7 @@ class OnlineResults:
         scores = torch.tensor([e['score'] for e in self.history[-1].values()])
         mean = scores.mean().item()
         std = scores.std().nan_to_num().item()
+        self.history[-1]['mean'], self.history[-1]['std'] = mean, std
         self.metrics.mean, self.metrics.std = mean, std
 
         self.history += [{}]
