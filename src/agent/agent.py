@@ -135,6 +135,7 @@ class Agent (OptionsModule):
 
         # Step environment forward
         data['N'], data['R'], data['T'] = self.envs[env].step(data['A'].squeeze())
+        self.states[env] = data['N']
         self.steps[env] += 1
 
         # Track scores
