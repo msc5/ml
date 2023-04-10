@@ -197,7 +197,7 @@ class Agent (OptionsModule):
 
         self.reset()
 
-        alive = list(self.envs)
+        alive = list(range(min(self.parallel_envs, n_episodes)))
         p_episodes = self.parallel_envs
 
         while alive:
