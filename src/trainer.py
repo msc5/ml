@@ -526,7 +526,7 @@ class Trainer (Module):
 
                 # Sort results by mean score
                 caches = sorted(enumerate(history), key=lambda x: -x[1].get('mean', 0))
-                for run, cache in caches[:5]:
+                for run, cache in caches[:3]:
                     yield self._render_online_table(cache, name=f'Run {run + 1} / {len(history)}')
 
         else:
