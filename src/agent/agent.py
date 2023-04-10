@@ -101,8 +101,8 @@ class Agent (OptionsModule):
         fps = 60
 
         render = np.stack(self.frames[env]).astype(np.uint8)
-        imageio.mimwrite(file + '.mp4', render, fps=fps)
-        imageio.mimwrite(file + '.gif', render, fps=fps)
+        # imageio.mimwrite(file + '.mp4', render, fps=fps)
+        imageio.mimwrite(file + '.gif', render, fps=fps)  # type: ignore
 
         with Metadata(self.dir) as meta:
             meta.data[self.p_episode] = {**self.scores[env], 'steps': self.steps[env], 'complete': complete}
