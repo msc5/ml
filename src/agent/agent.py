@@ -224,6 +224,16 @@ class Agent (OptionsModule):
                                  save=save, results=results,
                                  **kwargs)
 
+                # 1. done and (p_episodes < n_episodes)
+                #   -> p_episodes += 1
+                #   -> False
+                # 2. done and not (p_episodes < n_episodes)
+                #   -> True
+                # 3. not done:
+                #   -> False
+
+                # stop_env
+
                 if done:
                     if p_episodes < n_episodes:
                         terminate += [False]
