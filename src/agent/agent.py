@@ -111,7 +111,6 @@ class Agent (OptionsModule):
 
     def step(self,
              env: int,
-             state: torch.Tensor,
              action: Optional[torch.Tensor] = None,
              render: bool = False,
              buffer: bool = True,
@@ -122,7 +121,7 @@ class Agent (OptionsModule):
         Steps an environment forward using action and collects data.
         """
 
-        data = {'X': state}
+        data = {'X': self.states[env]}
 
         # Render environment
         if render:
@@ -163,6 +162,7 @@ class Agent (OptionsModule):
     @torch.no_grad()
     def run_steps(self,
                   n_steps: int,
+                  n_envs: Optional[int] = None,
                   actor: Optional[Callable] = None,
                   stop: Optional[threading.Event] = None,
                   **kwargs):
@@ -171,17 +171,19 @@ class Agent (OptionsModule):
         """
 
         # Random actions unless actor provided
-        actions = [None] * self.parallel_envs
+        n_envs = n_envs or self.parallel_envs
+        i_envs = list(range(n_envs))
+        actions = [None] * n_envs
 
         for _ in range(n_steps):
 
             # Generate actions
             if actor is not None:
-                actions = actor(self.states)
+                actions = actor(self.states[i_envs])
 
             # Step environments
-            for env in self.envs:
-                self.step(env, self.states[env], actions[env], **kwargs)
+            for env in i_envs:
+                self.step(env, actions[env], **kwargs)
 
             if stop is not None and stop.is_set():
                 break
@@ -217,9 +219,8 @@ class Agent (OptionsModule):
                 # Select states and actions
                 env = alive[i]
                 action = actions[i]
-                state = self.states[alive][i]
 
-                done = self.step(env, state, action,
+                done = self.step(env, action,
                                  render=render, buffer=buffer,
                                  save=save, results=results,
                                  **kwargs)
