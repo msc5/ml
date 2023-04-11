@@ -130,8 +130,7 @@ class Module (OptionsModule, nn.Module):
         """
 
         for target_param, learner_param in zip(self.parameters(), learner.parameters()):
-            updated_param = p * learner_param.data + (1.0 - p) * target_param.data
-            target_param.data.copy_(updated_param)
+            target_param.data.copy_((1.0 - p) * target_param.data + p * learner_param.data)
 
     def add_module(self, name: str, module: Module | nn.Module, hide: bool = False):
 

@@ -121,7 +121,7 @@ class Agent (OptionsModule):
         Steps an environment forward using action and collects data.
         """
 
-        data = {'X': self.states[env]}
+        data = {'X': self.states[env].clone()}
 
         # Render environment
         if render:
