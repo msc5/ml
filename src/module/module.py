@@ -1,5 +1,6 @@
 from __future__ import annotations
 from abc import abstractmethod
+from contextlib import contextmanager
 from typing import Optional, Union
 
 from rich import box
@@ -98,14 +99,14 @@ class Module (OptionsModule, nn.Module):
             out_grad = out_grad[0] if isinstance(out_grad, tuple) and len(out_grad) > 0 else None
             if out_grad is not None:
                 self._out_grad_norm = out_grad.detach().norm().item()
-            else:
-                self._out_grad_norm = None
+            # else:
+            #     self._out_grad_norm = None
 
             in_grad = in_grad[0] if isinstance(in_grad, tuple) and len(in_grad) > 0 else None
             if in_grad is not None:
                 self._in_grad_norm = in_grad.detach().norm().item()
-            else:
-                self._in_grad_norm = None
+            # else:
+            #     self._in_grad_norm = None
 
     # -------------------- Abstract Methods -------------------- #
 
@@ -142,6 +143,26 @@ class Module (OptionsModule, nn.Module):
         if isinstance(module, Module) and not module._is_built:
             module._build()
             module._hide_module = hide
+
+    @contextmanager
+    def freeze(self):
+        """
+        Context manager that freezes module's parameters and returns them to
+        previous condition when exited.
+        """
+
+        states: dict[str, bool] = {}
+
+        # Freeze parameters
+        try:
+            for name, param in self.named_parameters():
+                states[name] = param.requires_grad
+                param.requires_grad_(False)
+            yield None
+
+        finally:
+            for name, param in self.named_parameters():
+                param.requires_grad_(states[name])
 
     # --------------------  Rendering --------------------  #
 

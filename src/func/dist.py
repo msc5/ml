@@ -3,11 +3,16 @@ from __future__ import annotations
 from typing import Optional
 import torch
 
+LOG_MIN = 1e-30
+
 
 def normal_prob(mean: torch.Tensor, std: torch.Tensor, sample: torch.Tensor):
     """
-    Computes likelihood of a sample given the mean and std of a normal distribution.
+    Computes likelihood of a sample given the mean and std of a normal
+    distribution.
     """
+
+    assert mean.shape == std.shape == sample.shape
 
     prob = ((1 / (torch.tensor(2 * torch.pi).sqrt() * std))
             * torch.exp(- (sample - mean)**2 / (2 * std)**2))
@@ -21,7 +26,7 @@ def normal_log_prob(mean: torch.Tensor, std: torch.Tensor, sample: torch.Tensor)
     """
 
     prob = normal_prob(mean, std, sample)
-    log_prob = torch.log(prob.clamp(1e-30, None))
+    log_prob = torch.log(prob.clamp(LOG_MIN, None))
 
     return log_prob
 
@@ -55,15 +60,14 @@ class MultivariateGaussian:
         Computes probability p(x) of sample x with respect to this
         distribution.
         """
-        return ((1 / (torch.tensor(2 * torch.pi).sqrt() * self.std))
-                * torch.exp(- (sample - self.mean)**2 / (2 * self.std)**2))
+        return normal_prob(self.mean, self.std, sample)
 
     def log_prob(self, sample: torch.Tensor):
         """
         Computes log probability p(x) of sample x with respect to this
         distribution.
         """
-        return torch.log(self.prob(sample).clamp(1e-30, None))
+        return normal_log_prob(self.mean, self.std, sample)
 
     def kl(self, other: Optional[MultivariateGaussian] = None, batch_dims: int = 1):
         """
