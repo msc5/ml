@@ -16,6 +16,7 @@ from ..cli import console
 from ..dot import Dot
 from ..options import Options, OptionsModule
 from ..renderables import Table
+from ..func import ema
 
 
 def get_device(dev: Optional[str] = None):
@@ -98,13 +99,13 @@ class Module (OptionsModule, nn.Module):
 
             out_grad = out_grad[0] if isinstance(out_grad, tuple) and len(out_grad) > 0 else None
             if out_grad is not None:
-                self._out_grad_norm = out_grad.detach().norm().item()
+                self._out_grad_norm = float(ema(self._out_grad_norm, out_grad.detach().norm().item()))
             # else:
             #     self._out_grad_norm = None
 
             in_grad = in_grad[0] if isinstance(in_grad, tuple) and len(in_grad) > 0 else None
             if in_grad is not None:
-                self._in_grad_norm = in_grad.detach().norm().item()
+                self._in_grad_norm = float(ema(self._in_grad_norm, in_grad.detach().norm().item()))
             # else:
             #     self._in_grad_norm = None
 

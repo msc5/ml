@@ -1,5 +1,6 @@
 from __future__ import annotations
 import contextlib as cl
+from dataclasses import dataclass
 import json
 import linecache
 import os
@@ -30,6 +31,8 @@ from .cli import console
 
 from .module import Module
 from .renderables import Table
+
+from .func import ema
 
 
 def viz(module: Module, tensor: torch.Tensor, path: str = 'viz'):
@@ -172,7 +175,6 @@ class Metadata:
 class Timer:
 
     def __init__(self, name: Optional[str] = None):
-        # self._start = self._mark = time.perf_counter()
         self._start = self._mark = time.time()
         self._rate = 0.0
         self._name = name
@@ -182,7 +184,6 @@ class Timer:
         self._rate = 0.0
 
     def __call__(self, reset: bool = False, step: bool = False):
-        # now = time.perf_counter()
         now = time.time()
         total = now - self._start
         diff = now - self._mark
@@ -190,7 +191,10 @@ class Timer:
             self._start = now
         if step:
             self._mark = now
-            self._rate = 1 / (diff / 60**2)
+
+            # EMA update
+            self._rate = ema(self._rate, 1 / (diff / 60**2))
+
         return total, diff
 
     def __enter__(self):
