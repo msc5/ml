@@ -488,6 +488,8 @@ class Trainer (Module):
         def format_float(data: Any):
             if type(data) == float:
                 return f'{data: 3.3f}'
+            elif type(data) == int:
+                return f'{data: ,}'
             else:
                 return f'{data}'
 
@@ -497,7 +499,7 @@ class Trainer (Module):
             return data
 
         group = []
-        tags = ['score', 'returns', 'steps']
+        tags = ['score', 'returns', 'steps', 'episode']
         cols = [t.capitalize() for t in tags]
         columns = (Column(col, ratio=1) for col in cols)
         table = Table(*columns, show_header=True, box=None, header_style='bold yellow')

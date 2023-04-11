@@ -23,8 +23,8 @@ class OnlineResults:
     def reset_current(self):
         self.current = {}
 
-    def set_complete(self, env: int):
-        self.history[-1][env] = self.current.pop(env)
+    def set_complete(self, env: int, episode: int):
+        self.history[-1][episode] = self.current.pop(env)
 
     def get_history(self):
         return [run for run in self.history[:-1]]

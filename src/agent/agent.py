@@ -71,6 +71,8 @@ class Agent (OptionsModule):
         self.frames[env] = []
         self.scores[env] = {'returns': 0.0, 'score': 0.0}
         self.steps[env] = 0
+        self.episode[env] = self.p_episode
+        self.p_episode += 1
 
         return self.states[env]
 
@@ -84,6 +86,7 @@ class Agent (OptionsModule):
         self.frames = {env: [] for env in self.envs}
         self.scores = {env: {'returns': 0.0, 'score': 0.0} for env in self.envs}
         self.steps = {env: 0 for env in self.envs}
+        self.episode = {env: -1 for env in self.envs}
 
         # Reset all environments
         for env in self.envs:
@@ -94,7 +97,7 @@ class Agent (OptionsModule):
 
     def save(self, env: int, complete: bool = True, fps: int = 60, **_):
 
-        name = f'episode_{self.p_episode}'
+        name = f'episode_{self.episode[env]}'
         file = os.path.join(self.dir, name)
 
         # Create image and write to file
@@ -107,15 +110,12 @@ class Agent (OptionsModule):
         with Metadata(self.dir) as meta:
             meta.data[self.p_episode] = {**self.scores[env], 'steps': self.steps[env], 'complete': complete}
 
-        self.p_episode += 1
-
     def step(self,
              env: int,
              action: Optional[torch.Tensor] = None,
              render: bool = False,
              buffer: bool = True,
-             save: bool = False,
-             results: bool = False,
+             eval: bool = False,
              **kwargs):
         """
         Steps an environment forward using action and collects data.
@@ -142,19 +142,23 @@ class Agent (OptionsModule):
         # Track scores
         self.scores[env]['returns'] += data['R'].item()
         self.scores[env]['score'] = cast(float, self.envs[env].score(self.scores[env]['returns']))
-        if self.results is not None:
-            self.results.set_current(env, {'steps': self.steps[env], **self.scores[env]})
 
         # Push step data to buffer
         if buffer:
             self.buffer.push(data)
 
+        # Push step data to renderable
+        if self.results is not None:
+            current = {'steps': self.steps[env], 'episode': self.episode[env], **self.scores[env]}
+            self.results.set_current(env, current)
+
         # Episode completed
         if data['T']:
-            if save:
+
+            if eval:
+                self.results.set_complete(env, self.episode[env])
                 self.save(env, **kwargs)
-            if results and self.results is not None:
-                self.results.set_complete(env)
+
             self.reset_env(env)
 
         return data['T'].item()
@@ -196,7 +200,7 @@ class Agent (OptionsModule):
                      buffer: bool = False,
                      save: bool = True,
                      stop: Optional[threading.Event] = None,
-                     results: bool = True,
+                     eval: bool = True,
                      **kwargs):
         """
         Runs "n_episodes" episodes in the environment. Optionally uses an Actor.
@@ -220,10 +224,7 @@ class Agent (OptionsModule):
                 env = alive[i]
                 action = actions[i]
 
-                done = self.step(env, action,
-                                 render=render, buffer=buffer,
-                                 save=save, results=results,
-                                 **kwargs)
+                done = self.step(env, action, render=render, buffer=buffer, eval=eval, **kwargs)
 
                 # 1. done and (p_episodes < n_episodes)
                 #   -> p_episodes += 1
@@ -253,10 +254,10 @@ class Agent (OptionsModule):
                         self.save(env, complete=False, **kwargs)
                 break
 
-        self.reset()
-
         if self.results is not None:
             self.results.reset_history()
+
+        self.reset()
 
     def close(self):
         section('Exiting', module='Agent', color='yellow')
