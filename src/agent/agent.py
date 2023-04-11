@@ -112,7 +112,7 @@ class Agent (OptionsModule):
     def step(self,
              env: int,
              state: torch.Tensor,
-             action: torch.Tensor,
+             action: Optional[torch.Tensor] = None,
              render: bool = False,
              buffer: bool = True,
              save: bool = False,
@@ -162,22 +162,22 @@ class Agent (OptionsModule):
 
     @torch.no_grad()
     def run_steps(self,
-                  actor: Callable,
                   n_steps: int,
-                  # parallel_envs: Optional[int] = None,
+                  actor: Optional[Callable] = None,
                   stop: Optional[threading.Event] = None,
                   **kwargs):
         """
         Runs "n_steps" in the environment. Optionally uses an Actor.
         """
 
-        # parallel_envs = parallel_envs or self.parallel_envs
-        # i_envs = list(range(parallel_envs))
+        # Random actions unless actor provided
+        actions = [None] * self.parallel_envs
 
         for _ in range(n_steps):
 
             # Generate actions
-            actions = actor(self.states)
+            if actor is not None:
+                actions = actor(self.states)
 
             # Step environments
             for env in self.envs:
