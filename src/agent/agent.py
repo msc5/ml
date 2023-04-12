@@ -5,13 +5,14 @@ from typing import Callable, Optional, cast
 import imageio
 import numpy as np
 import torch
+from torchvision.transforms.functional import crop, resize
 
 from ..cli import console
+from ..data import OnlineDataset
 from ..options import OptionsModule
 from ..renderables import check, section
 from ..util import Metadata, RedirectStream
 from .wrappers import Wrapper
-from ..data import OnlineDataset
 
 
 class Agent (OptionsModule):
@@ -30,10 +31,11 @@ class Agent (OptionsModule):
     n_episodes: Optional[int] = 15
     max_len: Optional[int] = 1000
     min_len: Optional[int] = None
+    use_video: bool = False
 
     x_size: int
     a_size: int
-    frame_shape: list[int] = [256, 256, 3]
+    frame_shape: list[int] = [3, 64, 64]
 
     def build(self):
 
@@ -61,6 +63,13 @@ class Agent (OptionsModule):
 
         self.reset()
 
+    def video_transform(self, frame: torch.Tensor):
+        frame_size = self.frame_shape[-1]
+        frame = frame.permute(2, 0, 1)
+        frame = crop(frame, top=64, left=64, width=128, height=192)
+        frame = resize(frame, (frame_size, frame_size), antialias=True)  # type: ignore
+        return frame
+
     def reset_env(self, env: int = 0):
         """
         Resets an environment.
@@ -73,6 +82,11 @@ class Agent (OptionsModule):
         self.steps[env] = 0
         self.episode[env] = self.p_episode
         self.p_episode += 1
+
+        if self.use_video:
+            self.v_states[env] = self.video_transform(self.envs[env].render())
+        else:
+            self.v_states[env] = torch.zeros(*self.frame_shape)
 
         return self.states[env]
 
@@ -87,6 +101,7 @@ class Agent (OptionsModule):
         self.scores = {env: {'returns': 0.0, 'score': 0.0} for env in self.envs}
         self.steps = {env: 0 for env in self.envs}
         self.episode = {env: -1 for env in self.envs}
+        self.v_states = torch.zeros((self.parallel_envs, *self.frame_shape), dtype=torch.float32)
 
         # Reset all environments
         for env in self.envs:
@@ -124,9 +139,13 @@ class Agent (OptionsModule):
         data = {'X': self.states[env].clone()}
 
         # Render environment
+        frame = None
         if render:
-            frame = self.envs[env].render() if render else torch.zeros(self.frame_shape)
+            frame = self.envs[env].render()
             self.frames[env].append(frame)
+        if self.use_video:
+            frame = frame if frame is not None else self.envs[env].render()
+            self.v_states[env] = self.video_transform(frame)
 
         # Choose action
         if action is None:
@@ -183,7 +202,10 @@ class Agent (OptionsModule):
 
             # Generate actions
             if actor is not None:
-                actions = actor(self.states[i_envs])
+                if self.use_video:
+                    actions = actor(self.v_states[i_envs])
+                else:
+                    actions = actor(self.states[i_envs])
 
             # Step environments
             for env in i_envs:
@@ -214,7 +236,10 @@ class Agent (OptionsModule):
         while alive:
 
             # Generate actions for environments that are still alive
-            actions = actor(self.states[alive])
+            if self.use_video:
+                actions = actor(self.v_states[alive])
+            else:
+                actions = actor(self.states[alive])
 
             # Step environments
             terminate = []

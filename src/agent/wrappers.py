@@ -187,7 +187,7 @@ class GymWrapper (gym.Env):
         self._state = state
         return self.state()
 
-    def render(self, height: int = 256, width: int = 256):
+    def render(self, height: int = 256, width: int = 256, transform: bool = False):
         with RedirectStream():
             frame = self.sim.render(height, width, camera_name='track', mode='offscreen')
         frame = np.flip(frame, axis=0)

@@ -140,10 +140,11 @@ class Module (OptionsModule, nn.Module):
         super().add_module(name, module)
 
         # Add to _children for OptionsModule to initialize
-        self._children[name] = module
-        if isinstance(module, Module) and not module._is_built:
-            module._build()
-            module._hide_module = hide
+        if isinstance(module, Module):
+            self._children[name] = module
+            if not module._is_built:
+                module._build()
+                module._hide_module = hide
 
     @contextmanager
     def freeze(self):

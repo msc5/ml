@@ -33,6 +33,8 @@ class OfflineDataset (OptionsModule):
 
     capacity: Optional[int] = None
 
+    keys: list[str] = ['X', 'N', 'A', 'R', 'T', 'E', 'V', 'QP', 'QV']
+
     # From D4RL
     X: torch.Tensor
     N: torch.Tensor
@@ -62,8 +64,6 @@ class OfflineDataset (OptionsModule):
 
     def build(self):
 
-        self.keys = ['X', 'N', 'A', 'R', 'T', 'E', 'V', 'QP', 'QV']
-
         self.dir = os.path.join('datasets', self.environment)
         if not os.path.exists(self.dir):
             os.makedirs(self.dir)
@@ -74,22 +74,6 @@ class OfflineDataset (OptionsModule):
     def items(self):
         for key in self.keys:
             yield (key, getattr(self, key, None))
-
-    def save(self):
-        """
-        Saves compressed version of D4RL dataset to 'datasets/'
-        """
-
-        Metadata.save(self.dir, self.meta)
-        for key, val in self.items():
-            file = os.path.join(self.dir, f'{key}.pt')
-            torch.save(val, file, pickle_protocol=5)
-
-        # Separately save
-        for key in ('stats', 'indices', 'F'):
-            if (val := getattr(self, key, None)) is not None:
-                file = os.path.join(self.dir, f'{key}.pt')
-                torch.save(val, file, pickle_protocol=5)
 
     def load(self):
         """
@@ -102,26 +86,29 @@ class OfflineDataset (OptionsModule):
 
         # Load cached D4RL dataset
         d4rl_path = os.path.join(self.dir, 'd4rl.pt')
-        if os.path.exists(d4rl_path):
+        if not self.reload and os.path.exists(d4rl_path):
             d4rl = torch.load(d4rl_path)
         else:
             d4rl = make_d4rl_dataset(self.environment)
-            for key, val in d4rl.items():
-                setattr(self, key, val)
             torch.save(d4rl, d4rl_path)
+        for key, val in d4rl.items():
+            setattr(self, key, val)
 
         self.generate_splits()
         self.generate_values()
         self.generate_stats()
 
         # Load cached video
-        video_path = os.path.join(self.dir, 'video.pt')
-        if os.path.exists(video_path):
-            self.F = torch.load(video_path)
-        else:
-            self.generate_video()
-            if self.F is not None:
-                torch.save(self.F, video_path)
+        if self.use_video:
+            video_path = os.path.join(self.dir, 'video.pt')
+            if not self.reload and os.path.exists(video_path):
+                self.F = torch.load(video_path)
+                self.keys += ['F']
+            else:
+                self.generate_video()
+                if self.F is not None:
+                    torch.save(self.F, video_path)
+                    self.keys += ['F']
 
     def generate_splits(self):
         """
@@ -351,7 +338,16 @@ class OfflineDataset (OptionsModule):
         Sample 'batch_size' single-timestep data.
         """
 
-        index = torch.randint(0, len(self.X), size=(batch_size,))
-        sample = {key: getattr(self, key)[index] for key in ['X', 'A', 'N', 'R', 'T', 'V']}
+        index = torch.randint(0, len(self.X), size=(batch_size, ))
+
+        # Reject terminal timesteps
+        terminals = self.T[index].nonzero()
+        index[terminals] -= 1
+
+        sample = {key: val[index] for key, val in self.items() if val is not None}
+
+        # Get next frame
+        if 'F' in sample and self.F is not None:
+            sample['FN'] = self.F[index + 1]
 
         return Dot(sample)

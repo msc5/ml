@@ -190,8 +190,6 @@ class Unet (Module):
 
     def build(self):
 
-        breakpoint()
-
         self._downs, self._ups = [], []
 
         # In size -> first conv chan
