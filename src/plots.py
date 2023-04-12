@@ -1,87 +1,89 @@
-from typing import cast
-import torch
-import matplotlib.pyplot as plt
-import matplotlib.animation as anim
 import os
+from typing import Optional, cast
+
+from einops import rearrange
+import matplotlib.pyplot as plt
+import torch
+import wandb
+
+from mpl_toolkits.axes_grid1 import ImageGrid
 
 from .cli import console
+from .options import OptionsModule
+from .trainer import Trainer
 from .util import RedirectStream
 
-
-def figure(*args, **kwargs) -> tuple[plt.Figure, plt.Axes]:
-    with RedirectStream():
-        fig, axes = plt.subplots(*args, figsize=(10, 10), **kwargs)
-    return fig, cast(plt.Axes, axes)
+plt.switch_backend('Agg')
 
 
-def gif_diff_values(values: torch.Tensor, tag: str = 'values'):
+class Plots (OptionsModule):
 
-    fig, ax = figure()
-    ax.set_ylim([0, 800])
-    ax.grid()
-    timesteps = torch.arange(values.shape[-1]).flip(0)
-    (ln, ) = ax.plot(timesteps, timesteps, 'r')
-    ln = cast(plt.Line2D, ln)
+    def build(self):
 
-    def update(frame: int):
-        ln.set_data(timesteps, values[frame, :])
-        ax.set_title(f'Step {frame}')
-        return (ln, )
+        from .trainer import CurrentTrainer
+        if CurrentTrainer is not None:
+            self.log = CurrentTrainer.log
+            self.progress = CurrentTrainer.progress
+            self.dir = os.path.join(CurrentTrainer.dir, 'plots')
+            if not os.path.exists(self.dir): os.makedirs(self.dir)
+        else:
+            raise Exception('No Current Trainer')
 
-    ani = anim.FuncAnimation(fig, update, frames=torch.arange(len(values)), blit=True, interval=5)
+    def save(self, fig, name: str, step: Optional[int] = None, **_):
+        step = step if step is not None else self.progress.get('session')
+        if self.log:
+            try:
+                wandb.log({name: fig}, step=step)
+            except:
+                pass
+        name += f'_{step}.png'
+        file = os.path.join(self.dir, name)
+        fig.savefig(file, bbox_inches='tight', dpi=300)
+        plt.close(fig)
 
-    writer = anim.FFMpegWriter(fps=30)
-    dir = os.path.dirname(tag)
-    if not os.path.exists(dir):
-        os.makedirs(dir)
-    path = f'{tag}.mp4'
-    ani.save(path, writer=writer)
-    plt.close(fig)
+    def _img(self, ax: plt.Axes, img: torch.Tensor, title: str = '', **kwargs):
+        ax.imshow(img, cmap='viridis', **kwargs)
+        ax.invert_yaxis()
+        ax.set_title(title)
+        ax.set_xlabel('Time Step (t)')
+        ax.set_ylabel('Dimension')
+        ax.grid(which='minor')
+        return ax
 
-    return path
+    def _img_prep(self, img: torch.Tensor):
+        img = img.cpu()
 
+        if len(img.shape) == 3:
+            img = rearrange(img, 'c h w -> h w c')
+            img = img.flip(dims=(0, ))
+            img = img.clamp(0.0, 1.0)
 
-def scores_plot(runs: dict, tag: str = 'scores'):
+        elif len(img.shape) == 2:
+            img = rearrange(img, 'h w -> w h')
 
-    fig, ax = figure()
-    ax.grid()
-    ax.set_title('Episode Score')
+        return img
 
-    for run, data in runs.items():
-        ax.plot(data['score'], label=run)
-    ax.legend()
-    ax.set_xlabel('Environment Timestep')
-    ax.set_ylabel('Normalized Score')
+    def _grid(self, n_rows: int, n_cols: int, **kwargs):
 
-    dir = os.path.dirname(tag)
-    if dir and not os.path.exists(dir):
-        os.makedirs(dir)
-    plt.savefig(f'{tag}.png')
-    plt.close(fig)
+        with RedirectStream():
+            fig = plt.figure(figsize=(20, 18))
+            defaults = {'axes_pad': 0.2}
+            defaults.update(kwargs)
+            grid = ImageGrid(fig, 111, nrows_ncols=(n_rows, n_cols), **defaults)
 
+        return fig, grid
 
-def rewards_plot(runs: dict, tag: str = 'rewards'):
+    @torch.no_grad()
+    def img(self, sample: torch.Tensor, name: str = 'img', **kwargs):
+        """
+        Plots a single image.
+        """
 
-    fig, ax = figure()
-    ax.grid()
-    ax.set_title('Episode Reward')
+        with RedirectStream():
+            fig = plt.figure(figsize=(18, 18))
+            axis = fig.subplots()
+            axis = cast(plt.Axes, axis)
 
-    for run, data in runs.items():
-        ax.plot(data['reward'], label=run)
-    ax.legend()
-    ax.set_xlabel('Environment Timestep')
-    ax.set_ylabel('Reward')
+        self._img(axis, self._img_prep(sample))
 
-    dir = os.path.dirname(tag)
-    if dir and not os.path.exists(dir):
-        os.makedirs(dir)
-    plt.savefig(f'{tag}.png')
-    plt.close(fig)
-
-
-class Figure:
-
-    def __init__(self, path: str) -> None:
-        self.path = path
-
-    # def __enter__(self):
+        return self.save(fig=fig, name=name, **kwargs)

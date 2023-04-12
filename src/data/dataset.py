@@ -348,6 +348,7 @@ class OfflineDataset (OptionsModule):
 
         # Get next frame
         if 'F' in sample and self.F is not None:
-            sample['FN'] = self.F[index + 1]
+            sample['F'] = (sample['F'].to(torch.float32) / 255.0)
+            sample['FN'] = (self.F[index + 1].to(torch.float32) / 255.0)
 
         return Dot(sample)

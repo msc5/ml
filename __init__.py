@@ -12,6 +12,7 @@ from .src.mp import *
 
 # Util
 from .src.func import misc, loss, dist
+from .src.plots import Plots
 
 # RL
 from .src.data import *
