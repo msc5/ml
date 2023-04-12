@@ -178,7 +178,10 @@ class UpConvBlock (ConvBlocks):
 
 class Unet (Module):
 
-    chans: list[list[int]]
+    in_chan: int
+    out_chan: int
+
+    chans: list[tuple[int, int]]
     residual: bool = True
 
     c_kernel_size: int = 4
@@ -187,23 +190,40 @@ class Unet (Module):
 
     def build(self):
 
+        breakpoint()
+
         self._downs, self._ups = [], []
 
-        # Construct downconv
-        for i, group in enumerate(self.chans):
+        # In size -> first conv chan
+        chans = [self.in_chan, self.chans[0][0]]
+        block = ConvBlock(self.opts(chans=chans))
+        self.add_module(f'_down_chan{0}', block)
+        self._downs += [block]
 
-            opts = self.opts(chans=group)
-            block = DownConvBlock(opts)
-            self.add_module(f'_down{i}', block, hide=True)
+        # Construct downconv
+        for i, (chan, layers) in enumerate(self.chans):
+
+            # Add main conv blocks
+            chans = [chan] * layers
+            block = DownConvBlock(self.opts(chans=chans))
+            self.add_module(f'_down{i}', block)
             self._downs += [block]
 
         # Construct upconv
-        for i, group in enumerate(reversed(self.chans)):
+        for i, (chan, layers) in enumerate(reversed(self.chans)):
 
-            opts = self.opts(chans=group)
-            block = UpConvBlock(opts)
-            self.add_module(f'_up{i}', block, hide=True)
+            # Add main conv blocks
+            chans = [chan] * layers
+            block = UpConvBlock(self.opts(chans=chans))
+            self.add_module(f'_up{i}', block)
             self._ups += [block]
+
+            # If not first step
+            if i > 0:
+                chans = [chan, self.chans[-(i + 1)][0]]
+                block = ConvBlock(self.opts(chans=chans))
+                self.add_module(f'_up_chan{i}', block)
+                self._ups += [block]
 
     def dry_run(self, size: Union[int, float] = 64, chan: int = 3):
 
@@ -236,10 +256,13 @@ class Unet (Module):
 
         return x, h
 
-    def upsample(self, x: torch.Tensor, h: list[torch.Tensor]):
+    def upsample(self, x: torch.Tensor, h: Optional[list[torch.Tensor]] = None):
 
         for up in self._ups:
-            x = up(x, h.pop(-1))
+            if self.residual and h is not None:
+                x = up(x, h.pop(-1))
+            else:
+                x = up(x)
 
         return x
 
