@@ -7,6 +7,7 @@ import threading
 import time
 from typing import Any, Optional
 
+
 import git
 from humanize import naturalsize
 from rich import box
@@ -190,6 +191,9 @@ class Trainer (Module):
             if self.log and self.run is not None:
                 meta.data['wandb'] = self.run.id
         check('Saved Options and Configuration')
+
+        if self.debug:
+            torch.autograd.set_detect_anomaly(True)  # type: ignore
 
         # if 'train' in self.opts.mode:
         #     ln_source = os.path.join(os.getcwd(), self.dir)
