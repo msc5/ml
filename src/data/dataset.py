@@ -341,7 +341,7 @@ class OfflineDataset (OptionsModule):
         index = torch.randint(0, len(self.X), size=(batch_size, ))
 
         # Reject terminal timesteps
-        terminals = self.T[index].nonzero()
+        terminals = (self.T[index].squeeze() | (index == len(self.X) - 1))
         index[terminals] -= 1
 
         sample = {key: val[index] for key, val in self.items() if val is not None}
