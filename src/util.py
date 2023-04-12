@@ -142,8 +142,8 @@ class Metadata:
 
     @classmethod
     def load(cls, dir: str):
-        if os.path.exists(dir):
-            path = os.path.join(dir, 'metadata.json')
+        path = os.path.join(dir, 'metadata.json')
+        if os.path.exists(path):
             with open(path, 'r') as f:
                 data = json.load(f)
             return data
@@ -152,8 +152,8 @@ class Metadata:
 
     @classmethod
     def save(cls, dir: str, data: dict):
-        if os.path.exists(dir):
-            path = os.path.join(dir, 'metadata.json')
+        path = os.path.join(dir, 'metadata.json')
+        if os.path.exists(path):
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4, default=str)
 

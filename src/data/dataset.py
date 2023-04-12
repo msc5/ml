@@ -33,21 +33,19 @@ class OfflineDataset (OptionsModule):
 
     capacity: Optional[int] = None
 
-    # Required
+    # From D4RL
     X: torch.Tensor
     N: torch.Tensor
     A: torch.Tensor
     R: torch.Tensor
     T: torch.Tensor
     E: torch.Tensor
-
-    # Optional
-    QP: torch.Tensor
-    QV: torch.Tensor
+    QP: Optional[torch.Tensor] = None
+    QV: Optional[torch.Tensor] = None
 
     # Generated
     V: torch.Tensor
-    F: torch.Tensor
+    F: Optional[torch.Tensor] = None
     indices: list[torch.Tensor]
     stats: dict[str, dict[str, torch.Tensor]]
     meta: dict
@@ -87,9 +85,10 @@ class OfflineDataset (OptionsModule):
             file = os.path.join(self.dir, f'{key}.pt')
             torch.save(val, file, pickle_protocol=5)
 
+        # Separately save
         for key in ('stats', 'indices', 'F'):
-            file = os.path.join(self.dir, f'{key}.pt')
             if (val := getattr(self, key, None)) is not None:
+                file = os.path.join(self.dir, f'{key}.pt')
                 torch.save(val, file, pickle_protocol=5)
 
     def load(self):
@@ -98,34 +97,33 @@ class OfflineDataset (OptionsModule):
         exist, generates it.
         """
 
-        # # Reload
-        # reloaded = False
-        # if self.reload or not os.path.exists(self.dir):
+        # Load metadata
+        self.meta = Metadata.load(self.dir)
 
-        # Load from D4RL
-        self.meta = {}
-        d4rl = make_d4rl_dataset(self.environment)
-        for key, val in d4rl.items():
-            setattr(self, key, val)
+        # Load cached D4RL dataset
+        d4rl_path = os.path.join(self.dir, 'd4rl.pt')
+        if os.path.exists(d4rl_path):
+            d4rl = torch.load(d4rl_path)
+        else:
+            d4rl = make_d4rl_dataset(self.environment)
+            for key, val in d4rl.items():
+                setattr(self, key, val)
+            torch.save(d4rl, d4rl_path)
 
-        # reloaded = True
+        self.generate_splits()
+        self.generate_values()
+        self.generate_stats()
 
-        # # Load from saved
-        # else:
-        #     self.meta = Metadata.load(self.dir)
-        #     for key, _ in self.items():
-        #         file = os.path.join(self.dir, f'{key}.pt')
-        #         setattr(self, key, torch.load(file))
+        # Load cached video
+        video_path = os.path.join(self.dir, 'video.pt')
+        if os.path.exists(video_path):
+            self.F = torch.load(video_path)
+        else:
+            self.generate_video()
+            if self.F is not None:
+                torch.save(self.F, video_path)
 
-        self.load_splits()
-        self.load_values()
-        self.load_video()
-        self.load_stats()
-
-        # if reloaded:
-        #     self.save()
-
-    def load_splits(self):
+    def generate_splits(self):
         """
         Generates indices of raw dataset.
         Inputs:
@@ -155,7 +153,7 @@ class OfflineDataset (OptionsModule):
 
         self.meta['lengths'] = [len(e) for e in self.indices]
 
-    def load_values(self):
+    def generate_values(self):
         """
         Computes state value function for entire dataset using rewards R.
         Inputs:
@@ -188,7 +186,7 @@ class OfflineDataset (OptionsModule):
 
         self.meta['discount'] = self.discount
 
-    def load_stats(self):
+    def generate_stats(self):
         """
         Compiles various information about the input data x.
         Inputs:
@@ -224,28 +222,25 @@ class OfflineDataset (OptionsModule):
 
             self.stats = stats
 
-    def load_video(self):
+    def generate_video(self):
 
-        if not self.use_video:
-            return
-
-        else:
+        if self.QP is not None and self.QV is not None:
 
             with RedirectStream():
                 env = gym.make(self.environment)
 
             n = len(self.QP)
             frames = None
-            resize = Resize((self.frame_size, self.frame_size), antialias=True)
+            resize = Resize((self.frame_size, self.frame_size), antialias=True)  # type: ignore
 
             for i in self._track(range(n), description='Rendering Frames'):
 
                 qp, qv = self.QP[i], self.QV[i]
-                env.set_state(qp, qv)
+                env.set_state(qp, qv)  # type: ignore
 
                 height, width = 256, 256
                 with RedirectStream():
-                    frame = env.sim.render(height, width, camera_name='track', mode='offscreen')
+                    frame = env.sim.render(height, width, camera_name='track', mode='offscreen')  # type: ignore
                 frame = np.flip(frame, axis=0)
                 frame = torch.from_numpy(frame.copy())
                 frame = frame.to(torch.uint8)
