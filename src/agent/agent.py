@@ -35,7 +35,7 @@ class Agent (OptionsModule):
 
     x_size: int
     a_size: int
-    frame_shape: list[int] = [3, 64, 64]
+    frame_shape: list[int]
 
     def build(self):
 
@@ -100,7 +100,7 @@ class Agent (OptionsModule):
         self.frames = {env: [] for env in self.envs}
         self.scores = {env: {'returns': 0.0, 'score': 0.0} for env in self.envs}
         self.steps = {env: 0 for env in self.envs}
-        self.episode = {env: -1 for env in self.envs}
+        self.episode = torch.zeros((self.parallel_envs, 1), dtype=torch.int64)
         self.v_states = torch.zeros((self.parallel_envs, *self.frame_shape), dtype=torch.float32)
 
         # Reset all environments
@@ -112,18 +112,16 @@ class Agent (OptionsModule):
 
     def save(self, env: int, complete: bool = True, fps: int = 60, **_):
 
-        name = f'episode_{self.episode[env]}'
+        episode = int(self.episode[env])
+        name = f'episode_{episode}'
         file = os.path.join(self.dir, name)
 
         # Create image and write to file
-        fps = 60
-
         render = np.stack(self.frames[env]).astype(np.uint8)
-        # imageio.mimwrite(file + '.mp4', render, fps=fps)
         imageio.mimwrite(file + '.gif', render, fps=fps)  # type: ignore
 
         with Metadata(self.dir) as meta:
-            meta.data[self.p_episode] = {**self.scores[env], 'steps': self.steps[env], 'complete': complete}
+            meta.data[episode] = {**self.scores[env], 'steps': self.steps[env], 'complete': complete}
 
     def step(self,
              env: int,
@@ -145,7 +143,8 @@ class Agent (OptionsModule):
             self.frames[env].append(frame)
         if self.use_video:
             frame = frame if frame is not None else self.envs[env].render()
-            self.v_states[env] = self.video_transform(frame)
+            frame = self.video_transform(frame)
+            self.v_states[env] = data['F'] = frame
 
         # Choose action
         if action is None:
@@ -164,18 +163,19 @@ class Agent (OptionsModule):
 
         # Push step data to buffer
         if buffer:
+            data['I'] = self.episode[env]
             self.buffer.push(data)
 
         # Push step data to renderable
         if self.results is not None:
-            current = {'steps': self.steps[env], 'episode': self.episode[env], **self.scores[env]}
+            current = {'steps': self.steps[env], 'episode': int(self.episode[env]), **self.scores[env]}
             self.results.set_current(env, current)
 
         # Episode completed
         if data['T']:
 
             if eval:
-                self.results.set_complete(env, self.episode[env])
+                self.results.set_complete(env, int(self.episode[env]))
                 self.save(env, **kwargs)
 
             self.reset_env(env)

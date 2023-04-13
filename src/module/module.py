@@ -1,7 +1,7 @@
 from __future__ import annotations
 from abc import abstractmethod
 from contextlib import contextmanager
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 from rich import box
 from rich.columns import Columns
@@ -51,6 +51,8 @@ class Module (OptionsModule, nn.Module):
     _in_grad_norm: Optional[float] = None
 
     device: torch.device = get_device()
+
+    # -------------------- Private Methods -------------------- #
 
     def __init__(self, opts: Optional[Union[Options, dict]] = None):
         if isinstance(opts, dict) and opts is not None:
@@ -108,6 +110,11 @@ class Module (OptionsModule, nn.Module):
                 self._in_grad_norm = float(ema(self._in_grad_norm, in_grad.detach().norm().item()))
             # else:
             #     self._in_grad_norm = None
+
+    # def __setattr__(self, key: str, val: Any):
+    #     if isinstance(val, nn.Module):
+    #         self.add_module(key, val)
+    #     object.__setattr__(self, key, val)
 
     # -------------------- Abstract Methods -------------------- #
 
