@@ -13,12 +13,12 @@ from .options import OptionsModule
 from .trainer import Trainer
 from .util import RedirectStream
 
-plt.switch_backend('Agg')
-
 
 class Plots (OptionsModule):
 
     def build(self):
+
+        plt.switch_backend('Agg')
 
         from .trainer import CurrentTrainer
         if CurrentTrainer is not None:
