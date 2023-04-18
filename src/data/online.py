@@ -16,7 +16,7 @@ class OnlineDataset (OptionsModule):
 
     use_video: bool = False
 
-    buffer_size: int = int(1e6)
+    buffer_size: int = int(1e5)
 
     # Data
     I: torch.Tensor

@@ -11,11 +11,12 @@ from rich.panel import Panel
 from rich.text import Text
 import torch
 import torch.nn as nn
+import os
 
 from ..cli import console
 from ..dot import Dot
 from ..options import Options, OptionsModule
-from ..renderables import Table
+from ..renderables import Table, check, section
 from ..func import ema
 
 
@@ -49,6 +50,8 @@ class Module (OptionsModule, nn.Module):
     _param_count: int = 0
     _out_grad_norm: Optional[float] = None
     _in_grad_norm: Optional[float] = None
+
+    load_submodule: str = ''
 
     device: torch.device = get_device()
 
@@ -90,6 +93,15 @@ class Module (OptionsModule, nn.Module):
 
         # Initialize optimizers
         self.optimizers = Dot(self.init_optimizers())
+
+        from ..trainer import CurrentTrainer
+        if CurrentTrainer is not None:
+            self.progress = CurrentTrainer.progress
+        else:
+            raise Exception('No Current Trainer!')
+
+        if self.load_submodule != '':
+            self.load(self.load_submodule)
 
         # Move self to device
         self.to(self.device)
@@ -172,6 +184,32 @@ class Module (OptionsModule, nn.Module):
         finally:
             for name, param in self.named_parameters():
                 param.requires_grad_(states[name])
+
+    def load(self, run: str):
+
+        section(f'Loading Model [magenta]{run}', module=self.__class__.__name__, color='yellow')
+        model_path = os.path.join(run, 'model.pt')
+        state_dict = torch.load(model_path, map_location=self.device)
+        for key, val in self.named_parameters():
+            if key in state_dict:
+                if (state_dict[key].shape != val.shape):
+                    check(f'Shape Mismatch: [red]{key}[reset]', color='magenta')
+                    console.print(f'     Expected: {val.shape}')
+                    console.print(f'     Loaded:   {state_dict[key].shape}')
+                    del state_dict[key]
+            else:
+                check(f'Missing Parameter: [yellow]{key}[reset]', color='magenta')
+        to_delete = set()
+        for key, val in state_dict.items():
+            if 'samples' in key:
+                check(f'Ignoring: [red]{key}[reset]', color='magenta')
+                to_delete.add(key)
+        for key in to_delete:
+            del state_dict[key]
+        check('Finished', color='magenta')
+        console.print('')
+
+        self.load_state_dict(state_dict, strict=False)
 
     # --------------------  Rendering --------------------  #
 

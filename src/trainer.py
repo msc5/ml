@@ -21,7 +21,6 @@ import torch
 import wandb
 
 from .cli import console
-from .data import OfflineDataset
 from .io import generate_name
 from .module import Module
 from .mp import Manager, Thread
