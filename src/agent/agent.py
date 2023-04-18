@@ -61,8 +61,6 @@ class Agent (OptionsModule):
 
         self.p_episode = 0
 
-        self.reset()
-
     def video_transform(self, frame: torch.Tensor):
         frame_size = self.frame_shape[-1]
         frame = frame.permute(2, 0, 1)
@@ -86,7 +84,7 @@ class Agent (OptionsModule):
         if self.use_video:
             self.v_states[env] = self.video_transform(self.envs[env].render())
         else:
-            self.v_states[env] = torch.zeros(*self.frame_shape)
+            self.v_states[env] = torch.zeros(1)
 
         return self.states[env]
 
@@ -101,7 +99,11 @@ class Agent (OptionsModule):
         self.scores = {env: {'returns': 0.0, 'score': 0.0} for env in self.envs}
         self.steps = {env: 0 for env in self.envs}
         self.episode = torch.zeros((self.parallel_envs, 1), dtype=torch.int64)
-        self.v_states = torch.zeros((self.parallel_envs, *self.frame_shape), dtype=torch.float32)
+
+        if self.use_video:
+            self.v_states = torch.zeros((self.parallel_envs, *self.frame_shape), dtype=torch.float32)
+        else:
+            self.v_states = torch.zeros((self.parallel_envs, 1))
 
         # Reset all environments
         for env in self.envs:
@@ -192,6 +194,9 @@ class Agent (OptionsModule):
         """
         Runs "n_steps" in the environment. Optionally uses an Actor.
         """
+
+        if self.p_episode == 0:
+            self.reset()
 
         # Random actions unless actor provided
         n_envs = n_envs or self.parallel_envs

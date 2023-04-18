@@ -90,8 +90,7 @@ class ConvBlocks (Module):
         for i in range(len(self.chans) - 1):
             opts = self.opts(in_chan=self.chans[i], out_chan=self.chans[i + 1])
             block = ConvBlock(opts)
-            block._hide_module = True
-            self.add_module(f'_block{i}', block)
+            self.add_module(f'_block{i}', block, hide=True)
             self._layers += [block]
 
     def forward(self, x: torch.Tensor):
