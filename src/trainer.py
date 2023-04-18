@@ -45,7 +45,7 @@ class Trainer (Module):
 
     # Loading / Saving
     # e.g. /results/narldiff/{group}/001-spring-green
-    load_model: str = ''
+    load_model: list[str] = []
     save_every: int = 5000
     rollout_every: int = 5000
     max_episodes: Optional[int] = None
@@ -162,9 +162,10 @@ class Trainer (Module):
         check('Built Trainer')
 
         # Load previous model
-        if self.load_model != '':
-            self.load(self.load_model)
-            check('Loaded Weights')
+        if self.load_model != []:
+            for path in self.load_model:
+                self.load(path)
+                check('Loaded Weights')
 
         # Initialize wandb
         self.run = None
@@ -189,6 +190,8 @@ class Trainer (Module):
             meta.data['parse'] = self.parse()._dict()
             if self.log and self.run is not None:
                 meta.data['wandb'] = self.run.id
+            meta.data['model'] = self.model.__class__.__name__
+
         check('Saved Options and Configuration')
 
         if self.debug:
@@ -342,7 +345,7 @@ class Trainer (Module):
             table.add_row('Module', self.opts.sys.module)
             table.add_row('Group', Text(self.group, style='cyan'))
             table.add_row('Run', Text(self.name, style='magenta'))
-            table.add_row('Loaded', Text(self.load_model, style='green') or empty)
+            table.add_row('Loaded', Text(str(self.load_model), style='green') or empty)
             yield table
 
         @rgroup()
@@ -453,38 +456,54 @@ class Trainer (Module):
 
         # Save weights
         model_path = os.path.join(self.dir, 'model.pt')
-        torch.save(self.state_dict(), model_path)
+        torch.save(self.model.state_dict(), model_path)
+
+        # Save Metadata
+        with Metadata(self.dir) as meta:
+            meta.data['opts'] = self.opts._dict()
+            meta.data['model'] = self.model.__class__.__name__
 
     def load(self, run: str):
+
         section(f'Loading Model [magenta]{run}')
-        model_path = os.path.join(run, 'model.pt')
-        state_dict = torch.load(model_path, map_location=self.device)
-        for key, val in self.named_parameters():
-            if key in state_dict:
+
+        metadata = Metadata.load(run)
+        selected = metadata['model']
+        module = self.get_mlmodule(selected)
+
+        if module is not None:
+
+            model_path = os.path.join(run, 'model.pt')
+            state_dict = torch.load(model_path, map_location=self.device)
+            for key, val in module.named_parameters():
+                if key in state_dict:
+                    if any([retrain in key for retrain in self.retrain]):
+                        check(f'Retraining: [yellow]{key}[reset]', color='magenta')
+                        del state_dict[key]
+                    elif (state_dict[key].shape != val.shape):
+                        check(f'Shape Mismatch: [red]{key}[reset]', color='magenta')
+                        console.print(f'     Expected: {val.shape}')
+                        console.print(f'     Loaded:   {state_dict[key].shape}')
+                        del state_dict[key]
+                else:
+                    check(f'Missing Parameter: [yellow]{key}[reset]', color='magenta')
+            to_delete = set()
+            for key, val in state_dict.items():
                 if any([retrain in key for retrain in self.retrain]):
-                    check(f'Retraining: [yellow]{key}[reset]', color='magenta')
-                    del state_dict[key]
-                elif (state_dict[key].shape != val.shape):
-                    check(f'Shape Mismatch: [red]{key}[reset]', color='magenta')
-                    console.print(f'     Expected: {val.shape}')
-                    console.print(f'     Loaded:   {state_dict[key].shape}')
-                    del state_dict[key]
-            else:
-                check(f'Missing Parameter: [yellow]{key}[reset]', color='magenta')
-        to_delete = set()
-        for key, val in state_dict.items():
-            if any([retrain in key for retrain in self.retrain]):
-                check(f'Retraining: [red]{key}[reset]', color='magenta')
-                to_delete.add(key)
-            if 'samples' in key:
-                check(f'Ignoring: [red]{key}[reset]', color='magenta')
-                to_delete.add(key)
-        for key in to_delete:
-            del state_dict[key]
+                    check(f'Retraining: [red]{key}[reset]', color='magenta')
+                    to_delete.add(key)
+                if 'samples' in key:
+                    check(f'Ignoring: [red]{key}[reset]', color='magenta')
+                    to_delete.add(key)
+            for key in to_delete:
+                del state_dict[key]
+            module.load_state_dict(state_dict, strict=False)
+
+        else:
+            raise Exception('Loaded module does not exist in current module')
+
         check('Finished', color='magenta')
         console.print('')
-
-        self.load_state_dict(state_dict, strict=False)
 
     def _render_online_table(self, cache: dict, name: str = 'Unnamed Run', style: str = 'black'):
 
