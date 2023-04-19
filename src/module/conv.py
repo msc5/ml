@@ -18,7 +18,7 @@ class ConvBlock (Module):
     stride: int = 1
     deconv: bool = False
     act: Any = nn.ELU
-    norm: bool = True
+    norm: bool = False
     padding: Union[Literal['same'], int] = 'same'
     dimension: Literal['1d', '2d', '3d'] = '2d'
 
@@ -79,7 +79,7 @@ class ConvBlocks (Module):
     deconv: bool = False
     final_act: bool = True
     act: Any = nn.ELU
-    norm: bool = True
+    norm: bool = False
     padding: Union[Literal['same'], int] = 'same'
     dimension: Literal['1d', '2d', '3d'] = '2d'
 
