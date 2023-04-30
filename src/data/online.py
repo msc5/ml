@@ -16,7 +16,7 @@ class OnlineDataset (OptionsModule):
 
     use_video: bool = False
 
-    buffer_size: int = int(1e5)
+    buffer_size: int = int(1e6)
 
     # Data
     I: torch.Tensor
@@ -87,11 +87,11 @@ class OnlineDataset (OptionsModule):
         # Sample random mini-batches
         indices = torch.randint(0, len(self) - 1, size=(batch_size, ))
 
-        # Reject terminal timesteps
-        terminals = (self.T[indices].squeeze()
-                     | (indices == len(self.X) - 1)
-                     | (self.I[indices] != self.I[indices + 1]).squeeze())
-        indices[terminals] -= 1
+        # # Reject terminal timesteps
+        # terminals = (self.T[indices].squeeze()
+        #              | (indices == len(self.X) - 1)
+        #              | (self.I[indices] != self.I[indices + 1]).squeeze())
+        # indices[terminals] -= 1
 
         sample = {key: field[indices] for key, field in self.items()}
 
