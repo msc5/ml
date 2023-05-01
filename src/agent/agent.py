@@ -183,8 +183,7 @@ class Agent (OptionsModule):
                 self.results.set_complete(env, int(self.episode[env]))
                 self.save(env, **kwargs)
 
-            else:
-                self.reset_env(env)
+            self.reset_env(env)
 
         return data['T'].item()
 
