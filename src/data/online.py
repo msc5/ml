@@ -68,7 +68,10 @@ class OnlineDataset (OptionsModule):
 
         for key, val in self.items():
             if key in data:
-                val[self.p % self.buffer_size] = data[key]
+                if data[key].isnan().any():
+                    raise Exception('Storing NaN values into buffer')
+                else:
+                    val[self.p % self.buffer_size] = data[key]
 
         self.p += 1
         self.n = max(self.n, self.p)
