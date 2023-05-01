@@ -177,10 +177,14 @@ class Agent (OptionsModule):
         if data['T']:
 
             if eval:
-                self.results.set_complete(env, int(self.episode[env]))
-                self.save(env, **kwargs)
 
-            self.reset_env(env)
+                # Ignore terminal steps for evaluation episodes
+                if self.steps[env] != 1000:
+                    self.results.set_complete(env, int(self.episode[env]))
+                    self.save(env, **kwargs)
+
+            else:
+                self.reset_env(env)
 
         return data['T'].item()
 
