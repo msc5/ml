@@ -178,10 +178,10 @@ class Agent (OptionsModule):
 
             if eval:
 
-                # Ignore terminal steps for evaluation episodes
-                if self.steps[env] != 1000:
-                    self.results.set_complete(env, int(self.episode[env]))
-                    self.save(env, **kwargs)
+                # # Ignore terminal steps for evaluation episodes
+                # if self.steps[env] != 1000:
+                self.results.set_complete(env, int(self.episode[env]))
+                self.save(env, **kwargs)
 
             else:
                 self.reset_env(env)
