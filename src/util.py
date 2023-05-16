@@ -136,13 +136,15 @@ class FreezeParameters:
 
 class Metadata:
 
-    def __init__(self, path: str, default: Optional[dict] = None) -> None:
-        self.path = os.path.join(path, 'metadata.json')
+    def __init__(self, path: str, name: str = 'metadata', default: Optional[dict] = None) -> None:
+        self.file = f'{name}.json'
+        self.path = os.path.join(path, self.file)
         self.data = default or {}
 
     @classmethod
-    def load(cls, dir: str):
-        path = os.path.join(dir, 'metadata.json')
+    def load(cls, dir: str, name: str = 'metadata'):
+        file = f'{name}.json'
+        path = os.path.join(dir, file)
         if os.path.exists(path):
             with open(path, 'r') as f:
                 data = json.load(f)
@@ -151,8 +153,9 @@ class Metadata:
             return {}
 
     @classmethod
-    def save(cls, dir: str, data: dict):
-        path = os.path.join(dir, 'metadata.json')
+    def save(cls, dir: str, name: str = 'metadata', data: dict = {}):
+        file = f'{name}.json'
+        path = os.path.join(dir, file)
         if os.path.exists(path):
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4, default=str)

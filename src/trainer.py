@@ -298,12 +298,42 @@ class Trainer (Module):
             if self.exit_event.is_set():
                 return
 
+    def generate_train_loop(self):
+        self.train_step_complete()
+        if self.exit_event.is_set():
+            return False
+        else:
+            return True
+
     def train_step_complete(self):
+
         self.log_metrics()
+        self.log_metrics_json()
+
         if self.progress.modulo('session', 'save'):
             self.save()
         self.progress.step('train')
         self.progress.step('session')
+
+    def log_metrics_json(self):
+        # Log to json
+        log = {}
+        for model in self._selected:
+            for key, val in model.metrics:
+                key = f'{self.group}-{model.__class__.__name__}{key}'
+                if isinstance(val.value, Number):
+                    log[key] = val.value
+            for key, val in model.ranges:
+                key = f'{self.group}-{model.__class__.__name__}{key}'
+                if isinstance(val.value, Ranges):
+                    log[f'{key}.min'] = val.value._min
+                    log[f'{key}.max'] = val.value._max
+                    log[f'{key}.mean'] = val.value._mean
+                    log[f'{key}.std'] = val.value._std
+        step = self.progress.get('session')
+        self._logged.update(Dot(log))
+        with Metadata(self.dir, name='log') as meta:
+            meta.data[step] = log
 
     def log_metrics(self):
         if self.log:
@@ -326,6 +356,10 @@ class Trainer (Module):
             step = self.progress.get('train') if self.wandb_resume else self.progress.get('session')
             wandb.log(log, step=step)
             self._logged.update(Dot(log))
+
+            # Log to json
+            with Metadata(self.dir, name='log') as meta:
+                meta.data[step] = log
 
     def test_loop(self):
         """
