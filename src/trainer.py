@@ -307,15 +307,17 @@ class Trainer (Module):
 
     def train_step_complete(self):
 
-        self.log_metrics()
-        self.log_metrics_json()
+        # self.log_metrics()
+        # self.log_metrics_json()
 
         if self.progress.modulo('session', 'save'):
             self.save()
+
         self.progress.step('train')
         self.progress.step('session')
 
     def log_metrics_json(self):
+
         # Log to json
         log = {}
         for model in self._selected:
@@ -436,12 +438,12 @@ class Trainer (Module):
                                dot=dot, progress=progress, status=status)
 
     def _init_screens(self):
-        config = [f'{k}: {str(v.value)}' for k, v in self._gather_opts()]
+        # config = [f'{k}: {str(v.value)}' for k, v in self._gather_opts()]
         screen_args = {'refresh_per_second': 8, 'screen': True, 'console': console}
         screens = {'live': Live(get_renderable=self.dashboard, **screen_args),
                    'opts': Live(self.opts, **screen_args),
-                   'logged': Live(self._logged, **screen_args),
-                   'config': Fuzzy(console, config)}
+                   'logged': Live(self._logged, **screen_args),}
+                   # 'config': Fuzzy(console, config)}
         if self.online_eval:
             screens['agent'] = Live(self, **screen_args)
         return screens
@@ -598,4 +600,4 @@ def get_current_trainer():
     if CurrentTrainer is not None:
         return CurrentTrainer
     else:
-        raise Exception('Manager not started!')
+        raise Exception('Trainer not started!')

@@ -24,3 +24,6 @@ from .src.shape import *
 
 # Renderables
 from .src.renderables import *
+
+# Server
+from .src import server

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from copy import deepcopy
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 from rich.columns import Columns
 
 from rich.console import Group
@@ -27,8 +27,9 @@ class Dot (object):
         self._update(*args, **kwargs)
 
     def _update(self, *args, **kwargs):
-        """ 
+        """
         Updates dot dictionary with provided args and kwargs.
+        (Overwrites existing data.)
         """
         args = list(args)
         for a in args:
@@ -42,9 +43,9 @@ class Dot (object):
         return self
 
     def _soft_update(self, *args, **kwargs):
-        """ 
-        Updates dot dictionary with provided args and kwargs. Does not replace
-        existing values.
+        """
+        Updates dot dictionary with provided args and kwargs.
+        (Does not overwrite existing data.)
         """
         def soft(key: str):
             return not key in self or self[key] == None
@@ -80,49 +81,34 @@ class Dot (object):
         """
         obj = {}
         for key, val in self._items():
-            if isinstance(val, Dot):
+            if isinstance(val, Dot) and len(val) > 0:
                 obj[key] = val._dict()
             elif isinstance(val, DotItem):
                 obj[key] = val.value
         return obj
 
-    def _dfs(self,
-             preorder: Optional[Callback] = None,
-             inorder: Optional[Callback] = None,
-             postorder: Optional[Callback] = None,
-             data: dict = {}):
+    def _list(self, root: str = '', delimiter: str = '/') -> list[tuple[str, Any]]:
         """
-        Performs Depth-First Search starting from self.
+        Returns a deep list of public key-value pairs in Dot.
         """
+        items = []
+        for key, val in self._items():
+            if isinstance(val, Dot) and len(val) > 0:
+                items += val._list(root=(root + key))
+            elif isinstance(val, DotItem):
+                items += [(root + delimiter + val.key, val.value)]
+        return items
 
-        if preorder is not None: preorder(self, data)
-        for (_, v) in self._items():
-            if isinstance(v, Dot):
-                if inorder is not None: inorder(self, data)
-                v.dfs(v, preorder=preorder, postorder=postorder)
-        if postorder is not None: postorder(self, data)
+    def __iter__(self):
+        """
+        Returns an iterable over deep key-value pairs of all items in Dot.
+        """
+        yield from self._list()
 
     def __call__(self, *args, **kwargs):
         map = deepcopy(self)
         map._update(*args, **kwargs)
         return map
-
-    def __iter__(self):
-        """
-        Returns an iterable over key-value pairs of all items in Dot. Items are
-        returned in DFS postorder, and each level is separated by "/".
-        """
-
-        def dfs(dot, parent):
-            keys = []
-            for (k, v) in dot._items():
-                if isinstance(v, Dot):
-                    keys += dfs(v, parent + '/' + k)
-                elif isinstance(v, DotItem):
-                    keys += [(parent + '/' + v.key, v)]
-            return keys
-
-        return iter(dfs(self, ''))
 
     def __contains__(self, key):
         return key in vars(self)
@@ -240,24 +226,3 @@ class Dot (object):
 
 
 Callback = Callable[[Dot, dict], None]
-
-
-if __name__ == "__main__":
-
-    o = Dot()
-
-    o.env = 'halfcheetah-expert-v2'
-    o.size = (5, 12)
-    o.seq_len = 50
-
-    o['m.u'] = 3
-
-    a = o.agent = Dot()
-    a.name = 'random-walker-2'
-    a.seq_len = 500
-
-    d = o.dataset = Dot()
-    g = d.general = Dot(name='Matthew')
-    p = o.post = Dot()
-
-    console.log(o)
