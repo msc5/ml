@@ -19,7 +19,7 @@ def get_metrics():
 def start():
 
     def server():
-        app.run(host='localhost', port=8081, debug=False)
+        app.run(host='localhost', port=5000, debug=False)
 
     thread = Thread(target=server, daemon=True)
     thread.start()
