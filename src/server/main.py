@@ -1,25 +1,45 @@
 """
     Main server script.
 
-    1. Initializes Servers
-        1. InfluxDB
-        2. Web Server
+    1. Starts Servers
+        a. InfluxDB (backend database)
+        b. Web Server (frontend)
+    2. Closes Servers on exit
+
 """
 
 import time
+import asyncio
 
 from rich.live import Live
 
 from ..mp import Thread
 from .server import ServerThread
 
-main_thread = Thread(main=True)
 
-threads = [ServerThread('influxdb', 'influxd')]
+def start():
 
-with Live(main_thread):
+    main_thread = Thread(main=True)
 
-    for thread in threads:
-        thread.start()
+    threads = [ServerThread(name='influxdb', command='influxd'),
+               ServerThread(name='website', command='npm run --prefix site/ dev')]
 
-    time.sleep(30)
+    with Live(main_thread):
+
+        try:
+
+            for thread in threads:
+                thread.start()
+
+            while True:
+                time.sleep(1)
+
+        except KeyboardInterrupt:
+
+            for thread in threads:
+                thread.join()
+
+
+if __name__ == "__main__":
+
+    start()
