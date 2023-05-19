@@ -6,8 +6,8 @@ import redis
 # Schema
 # python -> redis <-- websocket <-- web app
 
-# Establish a connection to the Redis server
-redis_client = redis.Redis(host='localhost', port=6379)
+# # Establish a connection to the Redis server
+# redis_client = redis.Redis(host='localhost', port=6379)
 
 
 async def websocket_echo(websocket, path):
