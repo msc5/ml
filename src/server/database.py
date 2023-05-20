@@ -1,26 +1,47 @@
 
 import os
+from typing import Optional, Union
 
-from influxdb_client import InfluxDBClient, Point
+from influxdb_client import InfluxDBClient, Point, WriteApi
 from influxdb_client.client.write_api import SYNCHRONOUS
+import torch
+
+api: Optional[WriteApi] = None
 
 token = os.environ.get("INFLUXDB_TOKEN")
 org = "ml"
 url = "http://localhost:8086"
 bucket = "initial_bucket"
 
-write_client = InfluxDBClient(url=url, token=token, org=org)
-write_api = write_client.write_api(write_options=SYNCHRONOUS)
 
-import torch
+def initialize():
 
-for value in torch.linspace(0, 1, steps=10):
+    client = InfluxDBClient(url=url, token=token, org=org)
+
+    global api
+    api = client.write_api(write_options=SYNCHRONOUS)
+
+    return api
+
+
+def log(key: str, step: int, value: Union[float, torch.Tensor]):
+
+    if isinstance(value, torch.Tensor):
+        value = value.item()
+
     point = (
-        Point("measurement2")
-        .field("field1", value.item())
+        Point(key)
+        .field("value", value)
+        .field("step", step)
     )
-    write_api.write(bucket=bucket, org="ml", record=point)
-    # time.sleep(1) # separate points by 1 second
 
-write_api.close()
-write_client.close()
+    global api
+    if api is None:
+        api = initialize()
+    api.write(bucket=bucket, org="ml", record=point)
+
+def close():
+
+    global api
+    if api is not None:
+        api.close()
