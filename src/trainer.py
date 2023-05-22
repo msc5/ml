@@ -21,15 +21,14 @@ import torch
 import wandb
 
 from .cli import console
-from .io import generate_name
 from .module import Module
-from .mp import Manager, Thread
+from .mp import Thread
 from .options import Options
 from .dot import Dot
 from .renderables import Alive, Table, check, section
-from .util import Fuzzy, Keyboard, Metadata, Ranges, Screens, Steps, System, Timer
+from .util import Keyboard, Metadata, Ranges, Screens, Steps, System, Timer
 from .shared import OnlineResults
-from .server import database
+from .client import database
 
 
 os.environ["WANDB_CONSOLE"] = "off"
@@ -41,8 +40,10 @@ class Trainer (Module):
     # Configuration options
     log: bool = False
     debug: bool = False
-    mode: str = 'train'
     online_eval: bool = False
+
+    mode: str = 'train'
+    modes: dict = {}
 
     # Loading / Saving
     # e.g. /results/narldiff/{group}/001-spring-green
@@ -82,38 +83,29 @@ class Trainer (Module):
     # Modules
     model: Module
 
-    def _build(self):
-        section('Building')
-        return super()._build()
-
-    @abc.abstractmethod
-    def train_step(self) -> None:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def test_step(self) -> None:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def actor_initial(self) -> Optional[torch.Tensor]:
-        return None
-
-    @abc.abstractmethod
-    def episode_callback(self, *args, **kwargs) -> None:
-        pass
-
     @abc.abstractmethod
     def optimizers(self, *args, **kwargs) -> dict:
         return {}
 
     def __init__(self, opts: Optional[Options] = None):
         super().__init__(opts)
+
+        # When trainer is initialized, it takes over as the global trainer
+        # object for all threads and subthreads.
         global CurrentTrainer
         CurrentTrainer = self
+
+        from .shared import session
+        session.trainer = self
+
         self._init_renderables()
 
+    def _build(self):
+        section('Building')
+        return super()._build()
+
     def _reset(self):
-        self._loops = []
+
         self.timer = Timer()
         self.progress = Steps(keys=['session'])
         self.progress.add_modulo('save', every=self.save_every)
@@ -125,6 +117,7 @@ class Trainer (Module):
 
         database.initialize()
 
+        # Get github info
         g = Dot()
         g.repo = git.Repo(os.getcwd())  # type: ignore
         g.master = g.repo.head.reference
@@ -144,24 +137,17 @@ class Trainer (Module):
         """
 
         self._reset()
-
         section('Starting')
 
-        # Initialize manager for multiprocessing
-        self.manager = Manager()
-        self.manager.start()
-        self.exit_event = self.manager.Event()
+        # Initialize shared session
+        from .shared import session
+        self.session = session
+        self.info = session.start(self)
 
-        # Metadata
-        with Metadata(self.results_dir) as meta:
-            meta.data['number'] = number = meta.data.get('number', 0) + 1
-        self.name = f'{number:03d}-{self.group if self.group != "misc" else generate_name()}'
-        self.dir = os.path.join(self.results_dir, self.opts.sys.module, self.name)
-        check(f'Created Directory [cyan]{self.dir}[reset]')
-
-        # with Live(get_renderable=self._render_building, transient=True):
-        self._build()
-        self.to(self.device)
+        # Build Trainer and models
+        with Live(get_renderable=self._render_building, transient=True):
+            self._build()
+            self.to(self.device)
         check('Built Trainer')
 
         # Load previous model
@@ -170,55 +156,20 @@ class Trainer (Module):
                 self.load(path)
                 check('Loaded Weights')
 
-        # Initialize wandb
-        self.run = None
-        if self.log:
-            console.print()
-            self.run = wandb.init(project=self.opts.sys.module, name=self.name,
-                                  group=self.wandb_group,
-                                  tags=[*self.tags, self.group],
-                                  # config={k: v.value for k, v in self.opts},
-                                  config={k: v.value for k, v in self._gather_params()},
-                                  id=self.wandb_id if self.wandb_resume else None)
-            console.print()
-            if self.wandb_resume:
-                check(f'Resumed wandb run [cyan]{self.wandb_id}[reset]')
-            else:
-                check('Initialized Wandb')
-
-        with Metadata(self.dir) as meta:
-            meta.data['opts'] = self.opts._dict()
-            # meta.data['progress'] = self.progress._dict()
-            meta.data['config'] = self._gather_params()._dict()
-            meta.data['parse'] = self.parse()._dict()
-            if self.log and self.run is not None:
-                meta.data['wandb'] = self.run.id
-            meta.data['model'] = self.model.__class__.__name__
-
-        check('Saved Options and Configuration')
-
         if self.debug:
             torch.autograd.set_detect_anomaly(True)  # type: ignore
 
-        # if 'train' in self.opts.mode:
-        #     ln_source = os.path.join(os.getcwd(), self.dir)
-        #     ln_dest = os.path.join(self.results_dir, self.opts.sys.module, self.group, 'latest')
-        #     if os.path.exists(ln_dest):
-        #         os.unlink(ln_dest)
-        #     os.symlink(ln_source, ln_dest)
-        #     check(f'Created symlink at [cyan]{ln_dest}[reset] from [cyan]{ln_source}[reset]')
+        # Save options and session info
+        with Metadata(self.info.dir) as meta:
+            meta.data['opts'] = self.opts._dict()
+            meta.data['model'] = self.model.__class__.__name__
+        check('Saved Options and Configuration')
 
         check('Finished')
 
-    def train(self):
-        """
-        Training loop.
-        """
+        section(f'Training Run [cyan3]{self.info.name}')
 
-        self.start()
-        section(f'Training Run [cyan3]{self.name}')
-
-        self._threads = {loop.__name__: Thread(target=loop, daemon=False) for loop in self._loops}
+        self._threads = {loop.__name__: Thread(target=loop, daemon=False) for loop in self.modes[self.mode]}
         self.screens = Screens(self._init_screens())
 
         def block():
@@ -264,8 +215,7 @@ class Trainer (Module):
         check('Saved')
 
         # Stop threads
-        # with Live(self.main_thread, console=console, transient=True):
-        self.exit_event.set()
+        self.info.exit_event.set()
         for thread in self._threads.values():
             if thread.is_alive():
                 thread.join()
@@ -274,38 +224,21 @@ class Trainer (Module):
         database.close()
 
         # Finish Wandb
-        if self.run is not None:
+        if self.info.wandb is not None:
             console.print()
-            self.run.finish(quiet=True)
+            self.info.wandb.finish(quiet=True)
             console.print()
         check('Finished Wandb')
 
         # Print information
         console.print(self.dashboard())
 
-        self.manager.shutdown()
+        self.session.manager.shutdown()
         check('Finished')
-
-        # except KeyboardInterrupt:
-        #     active = mp.active_children()
-        #     for child in active:
-        #         child.terminate()
-        #     sys.exit(0)
-
-    def train_loop(self):
-        """
-        Trains model on collected actions.
-        """
-
-        while True:
-            self.train_step()
-            self.train_step_complete()
-            if self.exit_event.is_set():
-                return
 
     def generate_train_loop(self):
         self.train_step_complete()
-        if self.exit_event.is_set():
+        if self.info.exit_event.is_set():
             return False
         else:
             return True
@@ -313,7 +246,6 @@ class Trainer (Module):
     def train_step_complete(self):
 
         # self.log_metrics()
-        # self.log_metrics_json()
         self.log_metrics_database()
 
         if self.progress.modulo('session', 'save'):
@@ -324,44 +256,10 @@ class Trainer (Module):
 
     def log_metrics_database(self):
 
-        step = self.progress.get('session')
-
         # Log to database
-        log = {}
-        for model in self._selected:
-            for key, val in model.metrics:
-                key = f'{self.group}-{model.__class__.__name__}{key}'
-                if isinstance(val, float) or isinstance(val, int):
-                    log[key] = val
-                    database.log(key, step, val)
-            for key, val in model.ranges:
-                key = f'{self.group}-{model.__class__.__name__}{key}'
-                if isinstance(val.value, Ranges):
-                    log[f'{key}.min'] = val.value._min
-                    log[f'{key}.max'] = val.value._max
-                    log[f'{key}.mean'] = val.value._mean
-                    log[f'{key}.std'] = val.value._std
-
-    def log_metrics_json(self):
-
-        # Log to json
-        log = {}
-        for model in self._selected:
-            for key, val in model.metrics:
-                key = f'{self.group}-{model.__class__.__name__}{key}'
-                if isinstance(val.value, Number):
-                    log[key] = val.value
-            for key, val in model.ranges:
-                key = f'{self.group}-{model.__class__.__name__}{key}'
-                if isinstance(val.value, Ranges):
-                    log[f'{key}.min'] = val.value._min
-                    log[f'{key}.max'] = val.value._max
-                    log[f'{key}.mean'] = val.value._mean
-                    log[f'{key}.std'] = val.value._std
-        step = self.progress.get('session')
-        self._logged.update(Dot(log))
-        with Metadata(self.dir, name='log') as meta:
-            meta.data[step] = log
+        for key, val in self.model.metrics:
+            if isinstance(val, float) or isinstance(val, int):
+                database.log(key, val)
 
     def log_metrics(self):
         if self.log:
@@ -386,16 +284,8 @@ class Trainer (Module):
             self._logged.update(Dot(log))
 
             # Log to json
-            with Metadata(self.dir, name='log') as meta:
+            with Metadata(self.info.dir, name='log') as meta:
                 meta.data[step] = log
-
-    def test_loop(self):
-        """
-        Tests model on collected actions.
-        """
-        # section('Starting Test Loop')
-        self.test_step()
-        # section('Exiting Test Loop')
 
     def _init_renderables(self):
 
@@ -406,7 +296,7 @@ class Trainer (Module):
             table = Table(box=box.ROUNDED, style='black')
             table.add_row('Module', self.opts.sys.module)
             table.add_row('Group', Text(self.group, style='cyan'))
-            table.add_row('Run', Text(self.name, style='magenta'))
+            table.add_row('Run', Text(self.info.name, style='magenta'))
             table.add_row('Loaded', Text(str(self.load_model), style='green') or empty)
             yield table
 
@@ -424,9 +314,9 @@ class Trainer (Module):
             table.add_row('Github', branch, commit)
 
             # Wandb and Slurm
-            wandb_id = Text(self.run.id, style='magenta') if self.run is not None else empty
+            wandb_id = Text(self.info.wandb.id, style='magenta') if self.info.wandb is not None else empty
             slurm_id = Text(self.slurm_id, style='magenta') if self.slurm_id != '' else empty
-            table.add_row('Wandb', Text('ID: ') + wandb_id, Alive(self.run is not None))
+            table.add_row('Wandb', Text('ID: ') + wandb_id, Alive(self.info.wandb is not None))
             table.add_row('Slurm', Text('ID: ') + slurm_id, Alive(self.slurm_id != ''))
 
             yield Panel(table, border_style='black')
@@ -436,7 +326,7 @@ class Trainer (Module):
             table = Table(box=box.ROUNDED, style='black')
             size = ''
             try:
-                size = int(subprocess.check_output(['du', '-s', self.dir]).split()[0])
+                size = int(subprocess.check_output(['du', '-s', self.info.dir]).split()[0])
                 size = naturalsize(size * 512)
             except:
                 pass
@@ -517,11 +407,11 @@ class Trainer (Module):
     def save(self):
 
         # Save weights
-        model_path = os.path.join(self.dir, 'model.pt')
+        model_path = os.path.join(self.info.dir, 'model.pt')
         torch.save(self.model.state_dict(), model_path)
 
         # Save Metadata
-        with Metadata(self.dir) as meta:
+        with Metadata(self.info.dir) as meta:
             meta.data['opts'] = self.opts._dict()
             meta.data['model'] = self.model.__class__.__name__
 
