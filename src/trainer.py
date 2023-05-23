@@ -2,13 +2,14 @@ import abc
 from functools import partial
 from numbers import Number
 import os
+import re
 import subprocess
 import threading
 import time
 from typing import Any, Optional
+from inspect import getmembers, ismethod
 
 
-import git
 from humanize import naturalsize
 from rich import box
 from rich.console import Group, group as rgroup
@@ -41,9 +42,7 @@ class Trainer (Module):
     log: bool = False
     debug: bool = False
     online_eval: bool = False
-
     mode: str = 'train'
-    modes: dict = {}
 
     # Loading / Saving
     # e.g. /results/narldiff/{group}/001-spring-green
@@ -104,7 +103,10 @@ class Trainer (Module):
         section('Building')
         return super()._build()
 
-    def _reset(self):
+    def start(self):
+        """
+        Initializes module for training loop.
+        """
 
         self.timer = Timer()
         self.progress = Steps(keys=['session'])
@@ -117,26 +119,6 @@ class Trainer (Module):
 
         database.initialize()
 
-        # Get github info
-        g = Dot()
-        g.repo = git.Repo(os.getcwd())  # type: ignore
-        g.master = g.repo.head.reference
-        g.branch = str(g.master.name)
-        g.commit = str(g.master.commit.message).replace('\n', ' ').strip()
-        self.github = g
-
-        # Get slurm job name
-        name = os.environ.get('SLURM_JOB_NAME')
-        id = os.environ.get('SLURM_JOB_ID')
-        if name is not None and id is not None:
-            self.slurm_id = f'{name}-{id}'
-
-    def start(self):
-        """
-        Initializes module for training loop.
-        """
-
-        self._reset()
         section('Starting')
 
         # Initialize shared session
@@ -156,6 +138,7 @@ class Trainer (Module):
                 self.load(path)
                 check('Loaded Weights')
 
+        # Debug mode
         if self.debug:
             torch.autograd.set_detect_anomaly(True)  # type: ignore
 
@@ -169,7 +152,14 @@ class Trainer (Module):
 
         section(f'Training Run [cyan3]{self.info.name}')
 
-        self._threads = {loop.__name__: Thread(target=loop, daemon=False) for loop in self.modes[self.mode]}
+        self._threads = {}
+        for name, method in getmembers(self, predicate=ismethod):
+            prefix = 'loop_'
+            if name[:len(prefix)] == prefix:
+                self._threads[name[len(prefix):]] = Thread(target=method, daemon=False)
+
+        # self._threads = {loop.__name__: Thread(target=loop, daemon=False) for loop in self.mode}
+
         self.screens = Screens(self._init_screens())
 
         def block():
@@ -309,8 +299,8 @@ class Trainer (Module):
                 table.add_row('Note', note)
 
             # Github
-            branch = Text('Branch: ') + Text(self.github.branch, style='magenta')
-            commit = Text('Commit: ') + Text('\"' + self.github.commit + '\"', style='green')
+            branch = Text('Branch: ') + Text(self.info.github.branch, style='magenta')
+            commit = Text('Commit: ') + Text('\"' + self.info.github.commit + '\"', style='green')
             table.add_row('Github', branch, commit)
 
             # Wandb and Slurm

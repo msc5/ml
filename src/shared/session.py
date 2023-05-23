@@ -2,15 +2,15 @@
 This module stores variables that are relevant for a single training session.
 """
 
+import git
 import os
 import wandb
-from typing import Optional
 
 from ..dot import Dot
 from ..io import generate_name
 from ..trainer import Trainer
 from ..util import Metadata
-from ..renderables import Progress, check
+from ..renderables import check
 from ..mp import Manager
 from ..cli import console
 
@@ -39,6 +39,19 @@ def start(trainer: Trainer):
     # file and set version number to 0.
     with Metadata('.') as meta:
         meta.data['version'] = info.version = meta.data.get('version', 0) + 1
+
+    # Get github info
+    info.github = g = Dot()
+    g.repo = git.Repo(os.getcwd())  # type: ignore
+    g.master = g.repo.head.reference
+    g.branch = str(g.master.name)
+    g.commit = str(g.master.commit.message).replace('\n', ' ').strip()
+
+    # Get slurm job name
+    name = os.environ.get('SLURM_JOB_NAME')
+    id = os.environ.get('SLURM_JOB_ID')
+    if name is not None and id is not None:
+        info.slurm_id = f'{name}-{id}'
 
     # Initialize run name and directory
     info.name = trainer.group if trainer.group != "misc" else generate_name()
