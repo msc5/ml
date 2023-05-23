@@ -22,8 +22,8 @@ def make_d4rl_dataset(name) -> dict:
         'next_observations': 'N',
         'actions': 'A',
         'rewards': 'R',
-        'terminals': 'TM',
-        'timeouts': 'TO',
+        'terminals': 'T',
+        'timeouts': 'E',
         'infos/qpos': 'QP',
         'infos/qvel': 'QV',
     }

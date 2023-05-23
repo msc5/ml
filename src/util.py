@@ -1,5 +1,6 @@
 from __future__ import annotations
 import contextlib as cl
+from dataclasses import dataclass
 import json
 import linecache
 import os
@@ -30,6 +31,8 @@ from .cli import console
 
 from .module import Module
 from .renderables import Table
+
+from .func import ema
 
 
 def viz(module: Module, tensor: torch.Tensor, path: str = 'viz'):
@@ -133,18 +136,29 @@ class FreezeParameters:
 
 class Metadata:
 
-    def __init__(self, path: str, default: Optional[dict] = None) -> None:
-        self.path = os.path.join(path, 'metadata.json')
+    def __init__(self, path: str, name: str = 'metadata', default: Optional[dict] = None) -> None:
+        self.file = f'{name}.json'
+        self.path = os.path.join(path, self.file)
         self.data = default or {}
 
     @classmethod
-    def load(cls, path: str):
+    def load(cls, dir: str, name: str = 'metadata'):
+        file = f'{name}.json'
+        path = os.path.join(dir, file)
         if os.path.exists(path):
             with open(path, 'r') as f:
                 data = json.load(f)
             return data
         else:
             return {}
+
+    @classmethod
+    def save(cls, dir: str, name: str = 'metadata', data: dict = {}):
+        file = f'{name}.json'
+        path = os.path.join(dir, file)
+        if os.path.exists(path):
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=4, default=str)
 
     def __enter__(self):
         if os.path.exists(self.path):
@@ -164,7 +178,6 @@ class Metadata:
 class Timer:
 
     def __init__(self, name: Optional[str] = None):
-        # self._start = self._mark = time.perf_counter()
         self._start = self._mark = time.time()
         self._rate = 0.0
         self._name = name
@@ -174,7 +187,6 @@ class Timer:
         self._rate = 0.0
 
     def __call__(self, reset: bool = False, step: bool = False):
-        # now = time.perf_counter()
         now = time.time()
         total = now - self._start
         diff = now - self._mark
@@ -182,7 +194,10 @@ class Timer:
             self._start = now
         if step:
             self._mark = now
-            self._rate = 1 / (diff / 60**2)
+
+            # EMA update
+            self._rate = ema(self._rate, 1 / (diff / 60**2))
+
         return total, diff
 
     def __enter__(self):
@@ -452,11 +467,6 @@ def cluster():
 
 class Steps:
 
-    # keys: list[str]
-    # steps: dict[str, int]
-    # timers: dict[str, Timer]
-    # mods: dict[str, dict]
-
     counters: dict
     moduli: dict
 
@@ -501,26 +511,26 @@ class Steps:
         return False
 
     def __rich__(self):
-        counters = Table(Column('Counter', ratio=1),
-                         Column('Steps', ratio=1),
-                         Column('Rate', ratio=3),
-                         show_header=True, box=None, header_style='bold yellow')
-        for key, counter in self.counters.items():
-            name = Text(key, style='blue')
-            steps = f'[yellow]{counter["steps"]:,}'
-            counters.add_row(name, steps, counter['timer']._render_rate())
 
-        moduli = Table(Column('Modulus', ratio=1),
-                       Column('Steps', ratio=1),
-                       Column('Every', ratio=1),
-                       show_header=True, box=None, header_style='bold yellow')
+        table = Table(Column('Name', ratio=1),
+                      Column('Steps', ratio=1),
+                      Column('Info', ratio=3),
+                      show_header=True, box=box.ROUNDED,
+                      style='black', header_style='bold yellow')
+
+        for key, counter in self.counters.items():
+            name = Text(key, style='magenta')
+            steps = f'[magenta]{counter["steps"]:,}'
+            info = counter['timer']._render_rate()
+            table.add_row(name, steps, info)
+
         for key, modulus in self.moduli.items():
             name = Text(key, style='blue')
-            steps = f'[yellow]{modulus["steps"]:,}'
-            every = f'[magenta]{modulus["every"]:,}'
-            moduli.add_row(name, steps, every)
+            steps = f'[blue]{modulus["steps"]:,}'
+            info = f'[white]Every [reset][blue]{modulus["every"]:,}[reset][white] steps'
+            table.add_row(name, steps, info)
 
-        return Panel(Group(counters, moduli), border_style='black')
+        return table
 
 
 class System:
@@ -578,11 +588,20 @@ class System:
         self._update()
         self._update_progress()
 
-        table = Table(Column('Device', vertical='middle'), 'Stat', box=box.ROUNDED, style='black')
-
+        panels = []
         for device, progress in self.progress.items():
-            label = Text(device, style='bold magenta')
-            panel = Panel(progress, border_style='black')
-            table.add_row(label, panel)
+            panels += [Panel(progress, title=device, title_align='left', border_style='black')]
 
-        yield table
+        group = Group(*panels)
+        yield group
+
+
+class Loss:
+
+    losses: dict
+
+    def __init__(self) -> None:
+        self.losses = {}
+
+    def add(self, name: str, loss: torch.Tensor):
+        self.losses[name] = loss

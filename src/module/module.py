@@ -1,6 +1,7 @@
 from __future__ import annotations
 from abc import abstractmethod
-from typing import Optional, Union
+from contextlib import contextmanager
+from typing import Any, Optional, Union
 
 from rich import box
 from rich.columns import Columns
@@ -10,11 +11,13 @@ from rich.panel import Panel
 from rich.text import Text
 import torch
 import torch.nn as nn
+import os
 
 from ..cli import console
 from ..dot import Dot
 from ..options import Options, OptionsModule
-from ..renderables import Table
+from ..renderables import Table, check, section
+from ..func import ema
 
 
 def get_device(dev: Optional[str] = None):
@@ -49,6 +52,8 @@ class Module (OptionsModule, nn.Module):
     _in_grad_norm: Optional[float] = None
 
     device: torch.device = get_device()
+
+    # -------------------- Private Methods -------------------- #
 
     def __init__(self, opts: Optional[Union[Options, dict]] = None):
         if isinstance(opts, dict) and opts is not None:
@@ -87,6 +92,12 @@ class Module (OptionsModule, nn.Module):
         # Initialize optimizers
         self.optimizers = Dot(self.init_optimizers())
 
+        from ..trainer import CurrentTrainer
+        if CurrentTrainer is not None:
+            self.progress = CurrentTrainer.progress
+        else:
+            raise Exception('No Current Trainer!')
+
         # Move self to device
         self.to(self.device)
 
@@ -97,15 +108,22 @@ class Module (OptionsModule, nn.Module):
 
             out_grad = out_grad[0] if isinstance(out_grad, tuple) and len(out_grad) > 0 else None
             if out_grad is not None:
+                # self._out_grad_norm = float(ema(self._out_grad_norm, out_grad.detach().norm().item()))
                 self._out_grad_norm = out_grad.detach().norm().item()
-            else:
-                self._out_grad_norm = None
+            # else:
+            #     self._out_grad_norm = None
 
             in_grad = in_grad[0] if isinstance(in_grad, tuple) and len(in_grad) > 0 else None
             if in_grad is not None:
+                # self._in_grad_norm = float(ema(self._in_grad_norm, in_grad.detach().norm().item()))
                 self._in_grad_norm = in_grad.detach().norm().item()
-            else:
-                self._in_grad_norm = None
+            # else:
+            #     self._in_grad_norm = None
+
+    # def __setattr__(self, key: str, val: Any):
+    #     if isinstance(val, nn.Module):
+    #         self.add_module(key, val)
+    #     object.__setattr__(self, key, val)
 
     # -------------------- Abstract Methods -------------------- #
 
@@ -130,8 +148,7 @@ class Module (OptionsModule, nn.Module):
         """
 
         for target_param, learner_param in zip(self.parameters(), learner.parameters()):
-            updated_param = p * learner_param.data + (1.0 - p) * target_param.data
-            target_param.data.copy_(updated_param)
+            target_param.data.copy_((1.0 - p) * target_param.data + p * learner_param.data)
 
     def add_module(self, name: str, module: Module | nn.Module, hide: bool = False):
 
@@ -139,10 +156,40 @@ class Module (OptionsModule, nn.Module):
         super().add_module(name, module)
 
         # Add to _children for OptionsModule to initialize
-        self._children[name] = module
-        if isinstance(module, Module) and not module._is_built:
-            module._build()
-            module._hide_module = hide
+        if isinstance(module, Module):
+            self._children[name] = module
+            if not module._is_built:
+                module._build()
+                module._hide_module = hide
+
+    @contextmanager
+    def freeze(self):
+        """
+        Context manager that freezes module's parameters and returns them to
+        previous condition when exited.
+        """
+
+        states: dict[str, bool] = {}
+
+        # Freeze parameters
+        try:
+            for name, param in self.named_parameters():
+                states[name] = param.requires_grad
+                param.requires_grad_(False)
+            yield None
+
+        finally:
+            for name, param in self.named_parameters():
+                param.requires_grad_(states[name])
+
+    def get_mlmodule(self, key: str):
+        if self.__class__.__name__ == key:
+            return self
+        else:
+            for child in self._children.values():
+                if isinstance(child, Module):
+                    if (result := child.get_mlmodule(key)) is not None:
+                        return result
 
     # --------------------  Rendering --------------------  #
 
@@ -178,13 +225,14 @@ class Module (OptionsModule, nn.Module):
 
         for name, child in self.named_children():
             if isinstance(child, Module) and not child._hide_grads and not child._hide_module:
-                module = Text('( ' + child.__class__.__name__ + ' )', style='blue')
                 if child._is_common:
                     heading = Text(name, style='yellow')
+                    module = Text(child.__class__.__name__, style='italic yellow')
                     table.add_row(heading, module, child._render_device(), child._render())
                 else:
                     heading = [Text(name, style='bold cyan')]
-                    heading = Columns([*heading, module, child._render_params()], padding=(0, 2))
+                    heading += [Text(child.__class__.__name__, style='italic cyan')]
+                    heading = Columns([*heading, child._render_params()], padding=(0, 2))
                     panel = Group(heading, child._render())
                     uncommons.append(panel)
 

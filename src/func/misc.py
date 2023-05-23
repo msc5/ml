@@ -1,7 +1,21 @@
+from typing import Optional, Union
 import torch
 import torch.nn.functional as F
 
 EPS = 1e-30
+
+
+def ema(current: Optional[Union[float, torch.Tensor]] = None,
+        new: Optional[Union[float, torch.Tensor]] = None,
+        p: float = 0.01):
+    """
+    Computes exponential moving average of 'current' value with 'new'
+    observation.
+    """
+    c = current or 0.0
+    n = new or 0.0
+    average = (1 - p) * c + p * n
+    return average
 
 
 def expand(x: torch.Tensor, dim: int = 0, n: int = 1):
@@ -180,5 +194,3 @@ def truncate(x: torch.Tensor, truncation: float):
     # Linear interpolation between original and modified distributions
     probs = x_new.float() * x + (1 - x_new.float()) * (-70)
     return probs
-
-

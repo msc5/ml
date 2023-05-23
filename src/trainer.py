@@ -2,12 +2,14 @@ import abc
 from functools import partial
 from numbers import Number
 import os
+import re
 import subprocess
 import threading
 import time
 from typing import Any, Optional
+from inspect import getmembers, ismethod
 
-import git
+
 from humanize import naturalsize
 from rich import box
 from rich.console import Group, group as rgroup
@@ -20,15 +22,14 @@ import torch
 import wandb
 
 from .cli import console
-from .data import OfflineDataset
-from .io import generate_name
 from .module import Module
-from .mp import Manager, Thread
+from .mp import Thread
 from .options import Options
 from .dot import Dot
 from .renderables import Alive, Table, check, section
-from .util import Fuzzy, Keyboard, Metadata, Ranges, Screens, Steps, System, Timer
+from .util import Keyboard, Metadata, Ranges, Screens, Steps, System, Timer
 from .shared import OnlineResults
+from .client import database
 
 
 os.environ["WANDB_CONSOLE"] = "off"
@@ -40,12 +41,12 @@ class Trainer (Module):
     # Configuration options
     log: bool = False
     debug: bool = False
-    mode: str = 'train'
     online_eval: bool = False
+    mode: str = 'train'
 
     # Loading / Saving
     # e.g. /results/narldiff/{group}/001-spring-green
-    load_model: str = ''
+    load_model: list[str] = []
     save_every: int = 5000
     rollout_every: int = 5000
     max_episodes: Optional[int] = None
@@ -69,7 +70,7 @@ class Trainer (Module):
     _gpus: list
 
     # Private variables
-    _online_results: Optional[OnlineResults] = None
+    _online_results: OnlineResults
 
     # Renderables
     layout: Layout
@@ -80,27 +81,6 @@ class Trainer (Module):
 
     # Modules
     model: Module
-    dataset: OfflineDataset
-
-    def _build(self):
-        section('Building')
-        return super()._build()
-
-    @abc.abstractmethod
-    def train_step(self) -> None:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def test_step(self) -> None:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def actor_initial(self) -> Optional[torch.Tensor]:
-        return None
-
-    @abc.abstractmethod
-    def episode_callback(self, *args, **kwargs) -> None:
-        pass
 
     @abc.abstractmethod
     def optimizers(self, *args, **kwargs) -> dict:
@@ -108,12 +88,26 @@ class Trainer (Module):
 
     def __init__(self, opts: Optional[Options] = None):
         super().__init__(opts)
+
+        # When trainer is initialized, it takes over as the global trainer
+        # object for all threads and subthreads.
         global CurrentTrainer
         CurrentTrainer = self
+
+        from .shared import session
+        session.trainer = self
+
         self._init_renderables()
 
-    def _reset(self):
-        self._loops = []
+    def _build(self):
+        section('Building')
+        return super()._build()
+
+    def start(self):
+        """
+        Initializes module for training loop.
+        """
+
         self.timer = Timer()
         self.progress = Steps(keys=['session'])
         self.progress.add_modulo('save', every=self.save_every)
@@ -121,95 +115,51 @@ class Trainer (Module):
         self.main_thread = Thread(main=True)
         self._logged = Layout()
         self.agent_table = Layout()
+        self._online_results = OnlineResults()
 
-        g = Dot()
-        g.repo = git.Repo(os.getcwd())  # type: ignore
-        g.master = g.repo.head.reference
-        g.branch = str(g.master.name)
-        g.commit = str(g.master.commit.message).replace('\n', ' ').strip()
-        self.github = g
-
-        # Get slurm job name
-        name = os.environ.get('SLURM_JOB_NAME')
-        id = os.environ.get('SLURM_JOB_ID')
-        if name is not None and id is not None:
-            self.slurm_id = f'{name}-{id}'
-
-    def start(self):
-        """
-        Initializes module for training loop.
-        """
-
-        self._reset()
+        database.initialize()
 
         section('Starting')
 
-        # Initialize manager for multiprocessing
-        self.manager = Manager()
-        self.manager.start()
-        self.exit_event = self.manager.Event()
+        # Initialize shared session
+        from .shared import session
+        self.session = session
+        self.info = session.start(self)
 
-        # Metadata
-        with Metadata(self.results_dir) as meta:
-            meta.data['number'] = number = meta.data.get('number', 0) + 1
-        self.name = f'{number:03d}-{self.group if self.group != "misc" else generate_name()}'
-        self.dir = os.path.join(self.results_dir, self.opts.sys.module, self.group, self.name)
-        check(f'Created Directory [cyan]{self.dir}[reset]')
-
-        # with Live(get_renderable=self._render_building, transient=True):
-        self._build()
-        self.to(self.device)
+        # Build Trainer and models
+        with Live(get_renderable=self._render_building, transient=True):
+            self._build()
+            self.to(self.device)
         check('Built Trainer')
 
         # Load previous model
-        if self.load_model != '':
-            self.load(self.load_model)
-            check('Loaded Weights')
+        if self.load_model != []:
+            for path in self.load_model:
+                self.load(path)
+                check('Loaded Weights')
 
-        # Initialize wandb
-        self.run = None
-        if self.log:
-            console.print()
-            self.run = wandb.init(project=self.opts.sys.module, name=self.name,
-                                  group=self.wandb_group,
-                                  tags=[*self.tags, self.group],
-                                  # config={k: v.value for k, v in self.opts},
-                                  config={k: v.value for k, v in self._gather_params()},
-                                  id=self.wandb_id if self.wandb_resume else None)
-            console.print()
-            if self.wandb_resume:
-                check(f'Resumed wandb run [cyan]{self.wandb_id}[reset]')
-            else:
-                check('Initialized Wandb')
+        # Debug mode
+        if self.debug:
+            torch.autograd.set_detect_anomaly(True)  # type: ignore
 
-        with Metadata(self.dir) as meta:
+        # Save options and session info
+        with Metadata(self.info.dir) as meta:
             meta.data['opts'] = self.opts._dict()
-            # meta.data['progress'] = self.progress._dict()
-            meta.data['config'] = self._gather_params()._dict()
-            meta.data['parse'] = self.parse()._dict()
-            if self.log and self.run is not None:
-                meta.data['wandb'] = self.run.id
+            meta.data['model'] = self.model.__class__.__name__
         check('Saved Options and Configuration')
-
-        if 'train' in self.opts.mode:
-            ln_source = os.path.join(os.getcwd(), self.dir)
-            ln_dest = os.path.join(self.results_dir, self.opts.sys.module, self.group, 'latest')
-            if os.path.exists(ln_dest):
-                os.unlink(ln_dest)
-            os.symlink(ln_source, ln_dest)
-            check(f'Created symlink at [cyan]{ln_dest}[reset] from [cyan]{ln_source}[reset]')
 
         check('Finished')
 
-    def train(self):
-        """
-        Training loop.
-        """
+        section(f'Training Run [cyan3]{self.info.name}')
 
-        self.start()
-        section(f'Training Run [cyan3]{self.name}')
+        self._threads = {}
+        for name, method in getmembers(self, predicate=ismethod):
+            prefix = 'loop_'
+            if name[:len(prefix)] == prefix:
+                self._threads[name[len(prefix):]] = Thread(target=method, daemon=False)
 
-        self._threads = {loop.__name__: Thread(target=loop, daemon=False) for loop in self._loops}
+        # self._threads = {loop.__name__: Thread(target=loop, daemon=False) for loop in self.mode}
+
         self.screens = Screens(self._init_screens())
 
         def block():
@@ -255,49 +205,51 @@ class Trainer (Module):
         check('Saved')
 
         # Stop threads
-        # with Live(self.main_thread, console=console, transient=True):
-        self.exit_event.set()
+        self.info.exit_event.set()
         for thread in self._threads.values():
             if thread.is_alive():
                 thread.join()
         check('Threads stopped')
 
+        database.close()
+
         # Finish Wandb
-        if self.run is not None:
+        if self.info.wandb is not None:
             console.print()
-            self.run.finish(quiet=True)
+            self.info.wandb.finish(quiet=True)
             console.print()
         check('Finished Wandb')
 
         # Print information
         console.print(self.dashboard())
 
-        self.manager.shutdown()
+        self.session.manager.shutdown()
         check('Finished')
 
-        # except KeyboardInterrupt:
-        #     active = mp.active_children()
-        #     for child in active:
-        #         child.terminate()
-        #     sys.exit(0)
-
-    def train_loop(self):
-        """
-        Trains model on collected actions.
-        """
-
-        while True:
-            self.train_step()
-            self.train_step_complete()
-            if self.exit_event.is_set():
-                return
+    def generate_train_loop(self):
+        self.train_step_complete()
+        if self.info.exit_event.is_set():
+            return False
+        else:
+            return True
 
     def train_step_complete(self):
-        self.log_metrics()
+
+        # self.log_metrics()
+        self.log_metrics_database()
+
         if self.progress.modulo('session', 'save'):
             self.save()
+
         self.progress.step('train')
         self.progress.step('session')
+
+    def log_metrics_database(self):
+
+        # Log to database
+        for key, val in self.model.metrics:
+            if isinstance(val, float) or isinstance(val, int):
+                database.log(key, val)
 
     def log_metrics(self):
         if self.log:
@@ -321,13 +273,9 @@ class Trainer (Module):
             wandb.log(log, step=step)
             self._logged.update(Dot(log))
 
-    def test_loop(self):
-        """
-        Tests model on collected actions.
-        """
-        # section('Starting Test Loop')
-        self.test_step()
-        # section('Exiting Test Loop')
+            # Log to json
+            with Metadata(self.info.dir, name='log') as meta:
+                meta.data[step] = log
 
     def _init_renderables(self):
 
@@ -338,8 +286,8 @@ class Trainer (Module):
             table = Table(box=box.ROUNDED, style='black')
             table.add_row('Module', self.opts.sys.module)
             table.add_row('Group', Text(self.group, style='cyan'))
-            table.add_row('Run', Text(self.name, style='magenta'))
-            table.add_row('Loaded', Text(self.load_model, style='green') or empty)
+            table.add_row('Run', Text(self.info.name, style='magenta'))
+            table.add_row('Loaded', Text(str(self.load_model), style='green') or empty)
             yield table
 
         @rgroup()
@@ -351,14 +299,14 @@ class Trainer (Module):
                 table.add_row('Note', note)
 
             # Github
-            branch = Text('Branch: ') + Text(self.github.branch, style='magenta')
-            commit = Text('Commit: ') + Text('\"' + self.github.commit + '\"', style='green')
+            branch = Text('Branch: ') + Text(self.info.github.branch, style='magenta')
+            commit = Text('Commit: ') + Text('\"' + self.info.github.commit + '\"', style='green')
             table.add_row('Github', branch, commit)
 
             # Wandb and Slurm
-            wandb_id = Text(self.run.id, style='magenta') if self.run is not None else empty
+            wandb_id = Text(self.info.wandb.id, style='magenta') if self.info.wandb is not None else empty
             slurm_id = Text(self.slurm_id, style='magenta') if self.slurm_id != '' else empty
-            table.add_row('Wandb', Text('ID: ') + wandb_id, Alive(self.run is not None))
+            table.add_row('Wandb', Text('ID: ') + wandb_id, Alive(self.info.wandb is not None))
             table.add_row('Slurm', Text('ID: ') + slurm_id, Alive(self.slurm_id != ''))
 
             yield Panel(table, border_style='black')
@@ -368,7 +316,7 @@ class Trainer (Module):
             table = Table(box=box.ROUNDED, style='black')
             size = ''
             try:
-                size = int(subprocess.check_output(['du', '-s', self.dir]).split()[0])
+                size = int(subprocess.check_output(['du', '-s', self.info.dir]).split()[0])
                 size = naturalsize(size * 512)
             except:
                 pass
@@ -396,12 +344,12 @@ class Trainer (Module):
                                dot=dot, progress=progress, status=status)
 
     def _init_screens(self):
-        config = [f'{k}: {str(v.value)}' for k, v in self._gather_opts()]
+        # config = [f'{k}: {str(v.value)}' for k, v in self._gather_opts()]
         screen_args = {'refresh_per_second': 8, 'screen': True, 'console': console}
         screens = {'live': Live(get_renderable=self.dashboard, **screen_args),
                    'opts': Live(self.opts, **screen_args),
-                   'logged': Live(self._logged, **screen_args),
-                   'config': Fuzzy(console, config)}
+                   'logged': Live(self._logged, **screen_args), }
+        # 'config': Fuzzy(console, config)}
         if self.online_eval:
             screens['agent'] = Live(self, **screen_args)
         return screens
@@ -449,45 +397,63 @@ class Trainer (Module):
     def save(self):
 
         # Save weights
-        model_path = os.path.join(self.dir, 'model.pt')
-        torch.save(self.state_dict(), model_path)
+        model_path = os.path.join(self.info.dir, 'model.pt')
+        torch.save(self.model.state_dict(), model_path)
+
+        # Save Metadata
+        with Metadata(self.info.dir) as meta:
+            meta.data['opts'] = self.opts._dict()
+            meta.data['model'] = self.model.__class__.__name__
 
     def load(self, run: str):
+
         section(f'Loading Model [magenta]{run}')
-        model_path = os.path.join(run, 'model.pt')
-        state_dict = torch.load(model_path, map_location=self.device)
-        for key, val in self.named_parameters():
-            if key in state_dict:
+
+        metadata = Metadata.load(run)
+        selected = metadata['model']
+        module = self.get_mlmodule(selected)
+
+        if module is not None:
+
+            model_path = os.path.join(run, 'model.pt')
+            state_dict = torch.load(model_path, map_location=self.device)
+            for key, val in module.named_parameters():
+                if key in state_dict:
+                    if any([retrain in key for retrain in self.retrain]):
+                        check(f'Retraining: [yellow]{key}[reset]', color='magenta')
+                        del state_dict[key]
+                    elif (state_dict[key].shape != val.shape):
+                        check(f'Shape Mismatch: [red]{key}[reset]', color='magenta')
+                        console.print(f'     Expected: {val.shape}')
+                        console.print(f'     Loaded:   {state_dict[key].shape}')
+                        del state_dict[key]
+                else:
+                    check(f'Missing Parameter: [yellow]{key}[reset]', color='magenta')
+            to_delete = set()
+            for key, val in state_dict.items():
                 if any([retrain in key for retrain in self.retrain]):
-                    check(f'Retraining: [yellow]{key}[reset]', color='magenta')
-                    del state_dict[key]
-                elif (state_dict[key].shape != val.shape):
-                    check(f'Shape Mismatch: [red]{key}[reset]', color='magenta')
-                    console.print(f'     Expected: {val.shape}')
-                    console.print(f'     Loaded:   {state_dict[key].shape}')
-                    del state_dict[key]
-            else:
-                check(f'Missing Parameter: [yellow]{key}[reset]', color='magenta')
-        to_delete = set()
-        for key, val in state_dict.items():
-            if any([retrain in key for retrain in self.retrain]):
-                check(f'Retraining: [red]{key}[reset]', color='magenta')
-                to_delete.add(key)
-            if 'samples' in key:
-                check(f'Ignoring: [red]{key}[reset]', color='magenta')
-                to_delete.add(key)
-        for key in to_delete:
-            del state_dict[key]
+                    check(f'Retraining: [red]{key}[reset]', color='magenta')
+                    to_delete.add(key)
+                if 'samples' in key:
+                    check(f'Ignoring: [red]{key}[reset]', color='magenta')
+                    to_delete.add(key)
+            for key in to_delete:
+                del state_dict[key]
+            module.load_state_dict(state_dict, strict=False)
+
+        else:
+            raise Exception('Loaded module does not exist in current module')
+
         check('Finished', color='magenta')
         console.print('')
-
-        self.load_state_dict(state_dict, strict=False)
 
     def _render_online_table(self, cache: dict, name: str = 'Unnamed Run', style: str = 'black'):
 
         def format_float(data: Any):
             if type(data) == float:
                 return f'{data: 3.3f}'
+            elif type(data) == int:
+                return f'{data: ,}'
             else:
                 return f'{data}'
 
@@ -496,6 +462,7 @@ class Trainer (Module):
             data = dict(sorted(data.items(), key=lambda x: -x[1]['score']))
             return data
 
+        group = []
         tags = ['score', 'returns', 'steps', 'episode']
         cols = [t.capitalize() for t in tags]
         columns = (Column(col, ratio=1) for col in cols)
@@ -503,11 +470,13 @@ class Trainer (Module):
         for run in ordered(cache).values():
             row = (f'{format_float(run[tag])}' for tag in tags)
             table.add_row(*row)
+        group += [table]
 
         if 'mean' in cache and 'std' in cache:
-            stats = f'[bold green]{cache["mean"]: 3.3f} ± {cache["std"]:3.3f}'
-            table.add_row(stats)
-        table = Panel(table, border_style=style, title=name, title_align='left')
+            group += [f'[bold green]{cache["mean"]: 3.3f} ± {cache["std"]:3.3f}']
+
+        group = Group(*group)
+        table = Panel(group, border_style=style, title=name, title_align='left')
 
         return table
 
@@ -523,7 +492,7 @@ class Trainer (Module):
 
                 # Sort results by mean score
                 caches = sorted(enumerate(history), key=lambda x: -x[1].get('mean', 0))
-                for run, cache in caches[:5]:
+                for run, cache in caches[:3]:
                     yield self._render_online_table(cache, name=f'Run {run + 1} / {len(history)}')
 
         else:
@@ -537,4 +506,4 @@ def get_current_trainer():
     if CurrentTrainer is not None:
         return CurrentTrainer
     else:
-        raise Exception('Manager not started!')
+        raise Exception('Trainer not started!')

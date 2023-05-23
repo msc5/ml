@@ -1,126 +1,29 @@
-import abc
-from collections import defaultdict
-import itertools
 import os
-import random
-import signal
 import threading
-import traceback
-from typing import Any, Callable, Optional, cast
+from typing import Callable, Optional, cast
 
 import imageio
 import numpy as np
 import torch
-import wandb
+from torchvision.transforms.functional import crop, resize
 
-from .. import plots as pp
 from ..cli import console
-from ..dot import Dot
-from ..mp import ManagedQueue, Pool
+from ..data import OnlineDataset
 from ..options import OptionsModule
-from ..renderables import Table, check, section
-from ..shared import OnlineResults
-from ..util import Metadata, RedirectStream, Timer
+from ..renderables import check, section
+from ..util import Metadata, RedirectStream
 from .wrappers import Wrapper
-from ..module import Module
-
-
-class Actor:
-
-    @abc.abstractmethod
-    def __call__(self, *args, **kwargs):
-        return self
-
-    @abc.abstractmethod
-    def initial(self) -> torch.Tensor:
-        return None
-
-    @abc.abstractmethod
-    def before(self) -> None:
-        """
-        Function that is run before an episode runs.
-        """
-        return None
-
-    @abc.abstractmethod
-    def act(self, data: dict, cache: dict, envs: dict) -> torch.Tensor:
-        """
-        Function that is called at each step of the episode.
-        """
-        return None
-
-    @abc.abstractmethod
-    def after(self, cache: dict, env: int) -> None:
-        """
-        Function that is run after an episode runs.
-        """
-        return None
-
-
-def io_loop(queues: dict[str, ManagedQueue], io_lock: Any):
-
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-
-    while True:
-
-        env, cache = queues['in'].get()
-        if env is None and cache is None:
-            return
-
-        dir = cache['dir']
-        if not os.path.exists(dir):
-            os.makedirs(dir)
-
-        name = f'episode_{cache["episode"]}'
-        file = os.path.join(dir, name)
-
-        # Create image and write to file
-        fps = 60
-
-        with io_lock:
-
-            if cache.get('values') is not None:
-                animation = pp.gif_diff_values(cache['values'], tag=f'{file}_values')
-                del animation
-
-            if cache.get('render') is not None:
-                render = cache['render'].numpy().astype(np.uint8)
-                imageio.mimwrite(file + '.mp4', render, fps=fps)
-                imageio.mimwrite(file + '.gif', render, fps=fps)
-                del render
-
-            with Metadata(dir) as meta:
-                if not 'runs' in meta.data:
-                    meta.data['runs'] = {}
-                entry = {'status': cache['status'],
-                         # 'step': cache['step'],
-                         'score': cache['score'].tolist(),
-                         'reward': cache['reward'].tolist(),
-                         'returns': cache['returns'].tolist()}
-                meta.data['runs'][name] = entry
-
-        del env
-        del cache
-
-
-def wandb_loop(queues: dict[str, ManagedQueue]):
-    while True:
-        cmd, msg = queues['out'].get()
-        if cmd == None and msg == None:
-            return
-        elif cmd == 'log video':
-            video = wandb.Video(msg['video'], caption=msg['name'], fps=msg['fps'], format=msg['format'])
-            wandb.log({msg['name']: video}, step=msg['step'])
-        elif cmd == 'exception':
-            section('Exception', module=msg.get('module'), color='red')
-            console.log(msg.get('traceback'))
 
 
 class Agent (OptionsModule):
+    """
+    Helper class for interacting with Gym environments.
+    """
 
     environment: str
 
     data: dict[str, torch.Tensor]
+    buffer: OnlineDataset
 
     log: bool = False
     discount: float = 0.99
@@ -128,24 +31,20 @@ class Agent (OptionsModule):
     n_episodes: Optional[int] = 15
     max_len: Optional[int] = 1000
     min_len: Optional[int] = None
+    use_video: bool = False
 
-    alive: dict = {}
-    dead: dict = {}
-    cache: dict = {}
+    x_size: int
+    a_size: int
+    frame_shape: list[int]
 
     def build(self):
 
         from ..mp import get_current_manager
         self.manager = get_current_manager()
-        self.io_lock = self.manager.Lock()
+        self.results = self.manager.OnlineResults()
 
+        # Number of environments to run in parallel
         self.parallel_envs = max(1, self.parallel_envs)
-        self.alive, self.dead = {}, {}
-
-        self.metrics = Dot()
-        self.steps = Dot(total=0)
-        for env in range(self.parallel_envs):
-            self.steps[env] = Dot(step=0, episode=0)
 
         # Initialize Environments
         self.envs = {}
@@ -158,60 +57,96 @@ class Agent (OptionsModule):
             self.dir = os.path.join(CurrentTrainer.dir, 'agent')
             if not os.path.exists(self.dir):
                 os.makedirs(self.dir)
+            self.results = CurrentTrainer._online_results
 
-        self._results = self.manager.OnlineResults()
+        self.p_episode = 0
+
+    def video_transform(self, frame: torch.Tensor):
+        frame_size = self.frame_shape[-1]
+        frame = frame.permute(2, 0, 1)
+        frame = crop(frame, top=64, left=64, width=128, height=192)
+        frame = resize(frame, (frame_size, frame_size), antialias=True)  # type: ignore
+        return frame
 
     def reset_env(self, env: int = 0):
         """
         Resets an environment.
         """
 
-        self.steps[env].step = 0
-        self.data['X'][env] = self.envs[env].reset()
-        self.data['A'][env] = self.envs[env].sample_action()
-        self.data['R'][env] = 0
-        self.data['T'][env] = 0
-        self.data['render'][env] = self.envs[env].render()
+        # Reset live environment
+        self.states[env] = self.envs[env].reset()
+        self.frames[env] = []
+        self.scores[env] = {'returns': 0.0, 'score': 0.0}
+        self.steps[env] = 0
+        self.episode[env] = self.p_episode
+        self.p_episode += 1
 
-        data = {key: val[env] for key, val in self.data.items()}
+        if self.use_video:
+            self.v_states[env] = self.video_transform(self.envs[env].render())
+        else:
+            self.v_states[env] = torch.zeros(1)
 
-        return data
+        return self.states[env]
 
-    def reset(self, n_episodes: Optional[int] = None):
+    def reset(self):
         """
         Resets agent.
         """
 
-        n_episodes = n_episodes or self.n_episodes
-
         # Reset step data
-        self.data = {}
-        self.data['X'] = torch.zeros((self.parallel_envs, self.x_size), dtype=torch.float32)
-        self.data['A'] = torch.zeros((self.parallel_envs, self.a_size), dtype=torch.float32)
-        self.data['R'] = torch.zeros(self.parallel_envs, dtype=torch.float32)
-        self.data['T'] = torch.zeros(self.parallel_envs, dtype=torch.bool)
-        self.data['render'] = torch.zeros((self.parallel_envs, 256, 256, 3))
+        self.states = torch.zeros((self.parallel_envs, self.x_size), dtype=torch.float32)
+        self.frames = {env: [] for env in self.envs}
+        self.scores = {env: {'returns': 0.0, 'score': 0.0} for env in self.envs}
+        self.steps = {env: 0 for env in self.envs}
+        self.episode = torch.zeros((self.parallel_envs, 1), dtype=torch.int64)
+
+        if self.use_video:
+            self.v_states = torch.zeros((self.parallel_envs, *self.frame_shape), dtype=torch.float32)
+        else:
+            self.v_states = torch.zeros((self.parallel_envs, 1))
 
         # Reset all environments
         for env in self.envs:
             self.reset_env(env)
 
-        # Reset variables
-        self.alive, self.dead = {}, {}
-        self.cache = {env: defaultdict(list) for env in self.envs.keys()}
-        self.queue = list(range(cast(int, n_episodes)))
+        if self.results is not None:
+            self.results.reset_current()
 
-        # Assign episodes to environments
-        for env in range(self.parallel_envs):
-            self.episode_reassign(env)
+    def save(self, env: int, complete: bool = True, fps: int = 60, **_):
+
+        episode = int(self.episode[env])
+        name = f'episode_{episode}'
+        file = os.path.join(self.dir, name)
+
+        # Create image and write to file
+        render = np.stack(self.frames[env]).astype(np.uint8)
+        imageio.mimwrite(file + '.gif', render, fps=fps)  # type: ignore
+
+        with Metadata(self.dir) as meta:
+            meta.data[episode] = {**self.scores[env], 'steps': self.steps[env], 'complete': complete}
 
     def step(self,
-             env: int = 0,
+             env: int,
              action: Optional[torch.Tensor] = None,
              render: bool = False,
-             **_):
+             buffer: bool = True,
+             eval: bool = False,
+             **kwargs):
+        """
+        Steps an environment forward using action and collects data.
+        """
 
-        data = {}
+        data = {'X': self.states[env].clone()}
+
+        # Render environment
+        frame = None
+        if render:
+            frame = self.envs[env].render()
+            self.frames[env].append(frame)
+        if self.use_video:
+            frame = frame if frame is not None else self.envs[env].render()
+            frame = self.video_transform(frame)
+            self.v_states[env] = data['F'] = frame
 
         # Choose action
         if action is None:
@@ -220,280 +155,142 @@ class Agent (OptionsModule):
             data['A'] = action.detach().cpu()
 
         # Step environment forward
-        data['X'], data['R'], data['T'] = self.envs[env].step(data['A'].squeeze())
-        self.steps[env].step += 1
+        data['N'], data['R'], data['T'] = self.envs[env].step(data['A'].squeeze())
+        self.states[env] = data['N']
+        self.steps[env] += 1
 
-        # Render environment
-        if render:
-            data['render'] = self.envs[env].render()
+        # Track scores
+        self.scores[env]['returns'] += data['R'].item()
+        self.scores[env]['score'] = cast(float, self.envs[env].score(self.scores[env]['returns']))
 
-        return data
+        # Push step data to buffer
+        if buffer:
+            data['I'] = self.episode[env]
+            self.buffer.push(data)
 
-    def _get_last(self, data: Any):
-        """ 
-        if item is a list, return the last item.
+        # Push step data to renderable
+        if self.results is not None:
+            current = {'steps': self.steps[env], 'episode': int(self.episode[env]), **self.scores[env]}
+            self.results.set_current(env, current)
+
+        # Episode completed
+        if data['T']:
+
+            if eval:
+
+                # # Ignore terminal steps for evaluation episodes
+                # if self.steps[env] != 1000:
+                self.results.set_complete(env, int(self.episode[env]))
+                self.save(env, **kwargs)
+
+            self.reset_env(env)
+
+        return data['T'].item()
+
+    @torch.no_grad()
+    def run_steps(self,
+                  n_steps: int,
+                  n_envs: Optional[int] = None,
+                  actor: Optional[Callable] = None,
+                  stop: Optional[threading.Event] = None,
+                  **kwargs):
         """
-        if isinstance(data, list) or isinstance(data, torch.Tensor):
-            if len(data) > 0:
-                return data[-1]
-            else:
-                return None
-        else:
-            return data
+        Runs "n_steps" in the environment. Optionally uses an Actor.
+        """
 
-    def _table(self, cache: dict, dead: dict):
+        if self.p_episode == 0:
+            self.reset()
 
-        table = Table('Episode', 'Environment', 'Score', 'Reward', 'Returns', 'Steps', 'Status',
-                      show_header=True, title='Results')
+        # Random actions unless actor provided
+        n_envs = n_envs or self.parallel_envs
+        i_envs = list(range(n_envs))
+        actions = [None] * n_envs
 
-        def format(data: Any):
-            data = self._get_last(data)
-            if type(data) == float:
-                return f'{data: 3.3f}'
-            else:
-                return f'{data}'
+        for _ in range(n_steps):
 
-        def add_row(run: dict):
-            if 'step' in run:
-                table.add_row(f'{format(run["episode"])}',
-                              f'{format(run["environment"])}',
-                              f'{format(run["score"])}',
-                              f'{format(run["reward"])}',
-                              f'{format(run["returns"])}',
-                              f'{format(run["step"])}',
-                              run['status'],
-                              style='green' if run['status'] == 'alive' else 'red')
-
-        def stat(data: dict):
-            if data:
-                scores = torch.tensor([e['score'][-1] for e in data.values()
-                                       if (e['score'] is not None and len(e['score']) > 0)])
-                if len(scores) > 0:
-                    mean = scores.mean().item()
-                    std = scores.std().nan_to_num().item()
-                    table.add_section()
-                    table.add_row(None, None, f'{mean:3.3f} ± {std:3.3f}')
-
-        def ordered(data):
-            return sorted(data.items(), key=lambda x: -(x[1].get('score', [0]) or [0])[-1])
-
-        for _, run in ordered(cache):
-            add_row(run)
-        # stat(self.cache)
-        table.add_section()
-        for _, run in ordered(dead):
-            add_row(run)
-        stat(dead)
-
-        return table
-
-    def __rich__(self):
-        return self._table(self.cache, self.dead)
-
-    def save(self, env: int, dir: str, fps: int = 60, **_):
-
-        cache = {}
-        for key, val in self.cache[env].items():
-            if isinstance(val, list) and len(val) != 0:
-                if isinstance(val[0], torch.Tensor):
-                    cache[key] = torch.stack(val)
+            # Generate actions
+            if actor is not None:
+                if self.use_video:
+                    actions = actor(self.v_states[i_envs])
                 else:
-                    cache[key] = torch.tensor(val)
-            else:
-                cache[key] = val
+                    actions = actor(self.states[i_envs])
 
-        if not os.path.exists(dir):
-            os.makedirs(dir)
+            # Step environments
+            for env in i_envs:
+                self.step(env, actions[env], **kwargs)
 
-        name = f'episode_{cache["episode"]}'
-        file = os.path.join(dir, name)
-
-        # Create image and write to file
-        fps = 60
-
-        if cache.get('values') is not None:
-            pp.gif_diff_values(cache['values'], tag=f'{file}_values')
-
-        if cache.get('render') is not None:
-            render = cache['render'].numpy().astype(np.uint8)
-            imageio.mimwrite(file + '.mp4', render, fps=fps)
-            imageio.mimwrite(file + '.gif', render, fps=fps)
-
-        with Metadata(dir) as meta:
-            if not 'runs' in meta.data:
-                meta.data['runs'] = {}
-            entry = {'status': cache['status'],
-                     # 'step': cache['step'],
-                     'score': cache['score'].tolist(),
-                     'reward': cache['reward'].tolist(),
-                     'returns': cache['returns'].tolist()}
-            meta.data['runs'][name] = entry
-
-    def episode_reassign(self, env: int, **kwargs):
-
-        if self.queue:
-            self.alive[env] = self.queue.pop(0)
-            self.steps[env].episode = self.alive[env]
-            default = {'episode': self.alive[env],
-                       'environment': env,
-                       'status': 'alive',
-                       'steps': 0}
-            self.cache[env] = defaultdict(list, default)
-            for key, val in self.reset_env(env, **kwargs).items():
-                self.cache[env][key].append(val)
-        else:
-            del self.alive[env]
-            del self.cache[env]
-            self.steps[env] = Dot(step=0, episode=0)
-
-    def episode_is_done(self, env: int) -> bool:
-        done = False
-        if self.data['T'][env]:
-            if self.min_len is not None and self.steps[env].step <= self.min_len:
-                pass
-            else:
-                done = True
-        if self.max_len is not None and self.steps[env].step >= self.max_len:
-            done = True
-        return done
-
-    def episode_step(self,
-                     env: int,
-                     dir: Optional[str] = None,
-                     save: bool = False,
-                     collect_results: bool = True,
-                     **kwargs):
-
-        action = self.data['A'][env]
-        data = self.step(env, action, **kwargs)
-        cache = cast(dict, self.cache[env])
-        for key, val in data.items():
-            self.data[key][env] = val
-            cache[key].append(val)
-
-        returns = cache['returns'][-1] if 'returns' in cache else 0.0
-        cache['steps'] = self.steps[env].step
-        cache['reward'].append(data['R'].item())
-        cache['returns'].append(returns + cache['reward'][-1])
-        cache['score'].append(self.envs[env].score(cache['returns'][-1]) * 100)
-
-        # Sync to shared struct
-        keys = ['score', 'reward', 'returns', 'steps', 'status', 'environment', 'episode']
-        if collect_results:
-            vals = {key: self._get_last(val) for key, val in cache.items() if key in keys}
-            self._results.set_current(env, vals)
-
-        if self.episode_is_done(env):
-            cache['status'] = 'complete'
-
-            # Collect completed episode
-            self.dead[self.alive[env]] = cache
-            if collect_results:
-                self._results.set_complete(env)
-
-            if dir is not None:
-                self.save(env, dir, **kwargs)
-            self.episode_reassign(env)
+            if stop is not None and stop.is_set():
+                break
 
     @torch.no_grad()
     def run_episodes(self,
                      actor: Callable,
-                     n_episodes: Optional[int] = None,
-                     dir: Optional[str] = None,
-                     results: Optional[OnlineResults] = None,
-                     collect_results: bool = True,
+                     n_episodes: int,
                      render: bool = True,
+                     buffer: bool = False,
                      save: bool = True,
                      stop: Optional[threading.Event] = None,
+                     eval: bool = True,
                      **kwargs):
         """
-        Runs an episode on the environment. Optionally uses an Actor.
+        Runs "n_episodes" episodes in the environment. Optionally uses an Actor.
         """
 
-        self._results = results or self._results
-        self.reset(n_episodes=n_episodes)
+        self.reset()
 
-        if collect_results:
-            self._results.reset_current()
+        alive = list(range(min(self.parallel_envs, n_episodes)))
+        p_episodes = self.parallel_envs
 
-        # --------------------------------------------------------------------------------
-        # Loop
-        # --------------------------------------------------------------------------------
-
-        self.metrics.time = Timer()
-        while self.alive:
-            self.metrics.time(reset=True, step=True)
-
-            # Keep environments that are still alive
-            self.alive = {k: v for k, v in self.alive.items() if v != None}
+        while alive:
 
             # Generate actions for environments that are still alive
-            states = self.data['X'][list(self.alive)]
-            actions = actor(states)
-            for act, env in enumerate(self.alive):
-                self.data['A'][env] = actions[act].cpu()
+            if self.use_video:
+                actions = actor(self.v_states[alive])
+            else:
+                actions = actor(self.states[alive])
 
             # Step environments
-            for env in list(self.alive):
-                self.episode_step(env, dir=(dir or self.dir),
-                                  render=render, save=save, **kwargs)
-            self.steps.total += 1
+            terminate = []
+            for i in range(len(alive)):
+
+                # Select states and actions
+                env = alive[i]
+                action = actions[i]
+
+                done = self.step(env, action, render=render, buffer=buffer, eval=eval, **kwargs)
+
+                # 1. done and (p_episodes < n_episodes)
+                #   -> p_episodes += 1
+                #   -> False
+                # 2. done and not (p_episodes < n_episodes)
+                #   -> True
+                # 3. not done:
+                #   -> False
+
+                # stop_env
+
+                if done:
+                    if p_episodes < n_episodes:
+                        terminate += [False]
+                        p_episodes += 1
+                    else:
+                        terminate += [True]
+                else:
+                    terminate += [False]
+
+            # Discard completed episodes
+            alive = [alive[i] for i in range(len(alive)) if not terminate[i]]
 
             if stop is not None and stop.is_set():
                 if save:
-                    for env in list(self.alive):
-                        self.save(env, dir=(dir or self.dir), **kwargs)
+                    for env in alive:
+                        self.save(env, complete=False, **kwargs)
                 break
 
-        if collect_results:
-            self._results.reset_current()
-            self._results.reset_history()
+        if self.results is not None:
+            self.results.reset_history()
 
-        return self.dead
-
-    @torch.no_grad()
-    def run_steps(self,
-                  actor: Callable,
-                  n_steps: int,
-                  stop: Optional[threading.Event] = None,
-                  **kwargs):
-        """
-        Runs an episode on the environment. Optionally uses an Actor.
-        """
-
-        self._dir = dir or self.dir
-        self.reset(n_episodes=n_steps)
-
-        # --------------------------------------------------------------------------------
-        # Loop
-        # --------------------------------------------------------------------------------
-
-        self.metrics.time = Timer()
-        for _ in range(n_steps):
-            self.metrics.time(reset=True, step=True)
-
-            # Keep environments that are still alive
-            self.alive = {k: v for k, v in self.alive.items() if v != None}
-
-            # Generate actions for environments that are still alive
-            states = self.data['X'][list(self.alive)]
-            actions = actor(states)
-            for act, env in enumerate(self.alive):
-                self.data['A'][env] = actions[act].cpu()
-
-            # Step environments
-            for env in list(self.alive):
-                self.episode_step(env, **kwargs)
-            self.steps.total += 1
-
-            if stop is not None and stop.is_set():
-                break
-
-        # Collect all episodes
-        for env in self.alive:
-            self.dead[self.alive[env]] = self.cache[env]
-
-        return self.dead
+        self.reset()
 
     def close(self):
         section('Exiting', module='Agent', color='yellow')

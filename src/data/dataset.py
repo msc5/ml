@@ -14,7 +14,7 @@ from ..dot import Dot
 from ..cli import console
 from ..data.d4rl import make_d4rl_dataset
 from ..options import OptionsModule
-from ..util import RedirectStream
+from ..util import Metadata, RedirectStream
 
 
 class OfflineDataset (OptionsModule):
@@ -29,11 +29,28 @@ class OfflineDataset (OptionsModule):
     terminal_penalty: float = -100.0
     max_length: int = 1000
     frame_size: int = 64
+    use_video: bool = False
 
     capacity: Optional[int] = None
 
-    data: dict = {}
-    stats: dict = {}
+    keys: list[str] = ['X', 'N', 'A', 'R', 'T', 'E', 'V', 'QP', 'QV']
+
+    # From D4RL
+    X: torch.Tensor
+    N: torch.Tensor
+    A: torch.Tensor
+    R: torch.Tensor
+    T: torch.Tensor
+    E: torch.Tensor
+    QP: Optional[torch.Tensor] = None
+    QV: Optional[torch.Tensor] = None
+
+    # Generated
+    V: torch.Tensor
+    F: Optional[torch.Tensor] = None
+    indices: list[torch.Tensor]
+    stats: dict[str, dict[str, torch.Tensor]]
+    meta: dict
 
     def _track(self, iterable: Iterable, description: str = ''):
         if self.debug:
@@ -43,23 +60,20 @@ class OfflineDataset (OptionsModule):
                          description=f' [blue][reset]  {description}...')
 
     def __len__(self):
-        return len(self.data['indices'])
+        return len(self.indices)
 
     def build(self):
+
+        self.dir = os.path.join('datasets', self.environment)
+        if not os.path.exists(self.dir):
+            os.makedirs(self.dir)
+
         if self.environment != '':
             self.load()
 
-    def save(self):
-        """
-        Saves compressed version of D4RL dataset (self.data) to 'datasets/'
-        """
-
-        path = os.path.join('datasets', self.environment)
-        file = os.path.join(path, 'data.pt')
-        if not os.path.exists(path):
-            os.makedirs(path)
-        torch.save(self.data, file, pickle_protocol=5)
-        # check(f'Saved Dataset to {file}', color='green'
+    def items(self):
+        for key in self.keys:
+            yield (key, getattr(self, key, None))
 
     def load(self):
         """
@@ -67,22 +81,36 @@ class OfflineDataset (OptionsModule):
         exist, generates it.
         """
 
-        path = os.path.join('datasets', self.environment, 'data.pt')
+        # Load metadata
+        self.meta = Metadata.load(self.dir)
 
-        # Reload
-        if self.reload or not os.path.exists(path):
-            self.data = make_d4rl_dataset(self.environment)
-            self.load_splits()
-            self.load_values()
-            # self.load_video()
-            self.load_stats()
-            self.save()
-
-        # Load from saved
+        # Load cached D4RL dataset
+        d4rl_path = os.path.join(self.dir, 'd4rl.pt')
+        if not self.reload and os.path.exists(d4rl_path):
+            d4rl = torch.load(d4rl_path)
         else:
-            self.data = torch.load(path)
+            d4rl = make_d4rl_dataset(self.environment)
+            torch.save(d4rl, d4rl_path)
+        for key, val in d4rl.items():
+            setattr(self, key, val)
 
-    def load_splits(self):
+        self.generate_splits()
+        self.generate_values()
+        self.generate_stats()
+
+        # Load cached video
+        if self.use_video:
+            video_path = os.path.join(self.dir, 'video.pt')
+            if not self.reload and os.path.exists(video_path):
+                self.F = torch.load(video_path)
+                self.keys += ['F']
+            else:
+                self.generate_video()
+                if self.F is not None:
+                    torch.save(self.F, video_path)
+                    self.keys += ['F']
+
+    def generate_splits(self):
         """
         Generates indices of raw dataset.
         Inputs:
@@ -91,15 +119,11 @@ class OfflineDataset (OptionsModule):
             episodes:   list[list[int]]
         """
 
-        # Episode delimiters
-        terminals = self.data['TM'][:, None]
-        if 'TO' in self.data:
-            terminals += self.data['TO'][:, None]
-
         # Set termination penalties
-        R = self.data['R'][:, None]
-        penalty_timesteps = self.data['TM'] & ~self.data['TO']
-        R[penalty_timesteps] += self.terminal_penalty
+        self.R[:, None][self.T] += self.terminal_penalty
+
+        # Episode delimiters (Both terminals and timeouts)
+        terminals = (self.T | self.E)[:, None]
 
         # Nonzero indices of terminals
         terminals[-1] = True
@@ -112,10 +136,11 @@ class OfflineDataset (OptionsModule):
         # Generate list of indices split by each episode
         episodes = list(torch.arange(len(terminals)).split(tuple(ends)))
 
-        self.data['indices'] = episodes
-        self.data['lengths'] = [len(e) for e in episodes]
+        self.indices = episodes
 
-    def load_values(self):
+        self.meta['lengths'] = [len(e) for e in self.indices]
+
+    def generate_values(self):
         """
         Computes state value function for entire dataset using rewards R.
         Inputs:
@@ -124,8 +149,8 @@ class OfflineDataset (OptionsModule):
             values:     [ size, 1 ]
         """
 
-        L, N = max(self.data['lengths']), len(self.data['lengths'])
-        x = self.data['R'].split(self.data['lengths'])
+        L, N = max(self.meta['lengths']), len(self.meta['lengths'])
+        x = self.R.split(self.meta['lengths'])
 
         # Pad with zeros
         rewards = torch.zeros(len(x), L)
@@ -140,14 +165,15 @@ class OfflineDataset (OptionsModule):
             values[:, t] = V
 
         # Re-flatten values
-        values = torch.cat([values[i, :self.data['lengths'][i]] for i in range(N)])
+        values = torch.cat([values[i, :self.meta['lengths'][i]] for i in range(N)])
         values = values[:, None]
-        assert len(values) == sum(self.data['lengths'])
+        assert len(values) == sum(self.meta['lengths'])
 
-        self.data['V'] = values
-        self.data['discount'] = self.discount
+        self.V = values
 
-    def load_stats(self):
+        self.meta['discount'] = self.discount
+
+    def generate_stats(self):
         """
         Compiles various information about the input data x.
         Inputs:
@@ -160,7 +186,7 @@ class OfflineDataset (OptionsModule):
         """
 
         stats = {}
-        for key, val in self._track(self.data.items(), description='Computing Stats'):
+        for key, val in self._track(self.items(), description='Computing Stats'):
             if isinstance(val, torch.Tensor):
 
                 # Collect shape
@@ -181,39 +207,42 @@ class OfflineDataset (OptionsModule):
                               'mean': mean, 'std': std,
                               'shape': shape, 'type': dtype}
 
-        self.data['stats'] = stats
+            self.stats = stats
 
-    def load_video(self):
+    def generate_video(self):
 
-        with RedirectStream():
-            env = gym.make(self.environment)
+        if self.QP is not None and self.QV is not None:
 
-        n = len(self.data['QP'])
-        frames = None
-        resize = Resize((self.frame_size, self.frame_size), antialias=True)  # type: ignore
-
-        for i in self._track(range(n), description='Rendering Frames'):
-
-            qp, qv = self.data['QP'][i], self.data['QV'][i]
-            env.set_state(qp, qv)  # type: ignore
-
-            height, width = 256, 256
             with RedirectStream():
-                frame = env.sim.render(height, width, camera_name='track', mode='offscreen')  # type: ignore
-            frame = np.flip(frame, axis=0)
-            frame = torch.from_numpy(frame.copy())
-            frame = frame.to(torch.uint8)
-            frame = frame.permute(2, 0, 1)
+                env = gym.make(self.environment)
 
-            frame = crop(frame, top=64, left=64, width=128, height=192)
-            frame = resize(frame)
+            n = len(self.QP)
+            frames = None
+            resize = Resize((self.frame_size, self.frame_size), antialias=True)  # type: ignore
 
-            if frames is None:
-                frames = torch.zeros((n, *frame.shape), dtype=torch.uint8)
+            for i in self._track(range(n), description='Rendering Frames'):
 
-            frames[i] = frame
+                qp, qv = self.QP[i], self.QV[i]
+                env.set_state(qp, qv)  # type: ignore
 
-        self.data['frames'] = frames
+                height, width = 256, 256
+                with RedirectStream():
+                    frame = env.sim.render(height, width, camera_name='track', mode='offscreen')  # type: ignore
+                frame = np.flip(frame, axis=0)
+                frame = torch.from_numpy(frame.copy())
+                frame = frame.to(torch.uint8)
+                frame = frame.permute(2, 0, 1)
+
+                frame = crop(frame, top=64, left=64, width=128, height=192)
+                frame = resize(frame)
+
+                if frames is None:
+                    frames = torch.zeros((n, *frame.shape), dtype=torch.uint8)
+
+                frames[i] = frame
+
+            assert frames is not None
+            self.F = frames
 
     def normalize(self, x: torch.Tensor, key: Optional[str] = None):
         """
@@ -222,8 +251,8 @@ class OfflineDataset (OptionsModule):
         Inputs / Outputs:
             x:  [ *, size ]
         """
-        if key is not None and key in self.data['stats']:
-            high, low = self.data['stats'][key]['high'], self.data['stats'][key]['low']
+        if key is not None and key in self.stats:
+            high, low = self.stats[key]['high'], self.stats[key]['low']
             normalized = (x.flatten(0, -2) - low.to(x.device)) / (high.to(x.device) - low.to(x.device))
             normalized = 2 * normalized - 1
             normalized = normalized.reshape(x.shape).to(torch.float32)
@@ -238,8 +267,8 @@ class OfflineDataset (OptionsModule):
         Inputs / Outputs:
             x:  [ *, size ]
         """
-        if key is not None and key in self.data['stats']:
-            high, low = self.data['stats'][key]['high'], self.data['stats'][key]['low']
+        if key is not None and key in self.stats:
+            high, low = self.stats[key]['high'], self.stats[key]['low']
             unnormalized = (x.clamp(-1.0, 1.0).flatten(0, -2) + 1) / 2.
             unnormalized = unnormalized * (high.to(x.device) - low.to(x.device)) + low.to(x.device)
             unnormalized = unnormalized.reshape(x.shape).to(torch.float32)
@@ -253,8 +282,8 @@ class OfflineDataset (OptionsModule):
         Inputs / Outputs:
             x:  [ *, size ]
         """
-        if key is not None and key in self.data['stats']:
-            mean, std = self.data['stats'][key]['mean'].to(x.device), self.data['stats'][key]['std'].to(x.device)
+        if key is not None and key in self.stats:
+            mean, std = self.stats[key]['mean'].to(x.device), self.stats[key]['std'].to(x.device)
             standardized = (x.flatten(0, -2) - mean[None]) / std[None]
             standardized = standardized.reshape(x.shape)
             standardized = standardized.to(torch.float32)
@@ -268,8 +297,8 @@ class OfflineDataset (OptionsModule):
         Inputs / Outputs:
             x:  [ *, size ]
         """
-        if key is not None and key in self.data['stats']:
-            mean, std = self.data['stats'][key]['mean'].to(x.device), self.data['stats'][key]['std'].to(x.device)
+        if key is not None and key in self.stats:
+            mean, std = self.stats[key]['mean'].to(x.device), self.stats[key]['std'].to(x.device)
             unstandardized = (x.flatten(0, -2) * std[None].to(x.device)) + mean.to(x.device)[None]
             unstandardized = unstandardized.reshape(x.shape)
             return unstandardized
@@ -281,7 +310,7 @@ class OfflineDataset (OptionsModule):
         Sample 'batch_size' continuous sequences of data of length given by 'seq_len'.
         """
 
-        tensors = dict(filter(lambda x: isinstance(x[1], torch.Tensor), self.data.items()))
+        tensors = dict(filter(lambda x: isinstance(x[1], torch.Tensor), self.items()))
 
         def slice_sequence(episode: torch.Tensor):
             valid_max = min(self.max_length, len(episode)) - seq_len
@@ -294,7 +323,7 @@ class OfflineDataset (OptionsModule):
         batch_size = min(batch_size, len(self))
 
         # Select batch_size from episodes that are at least seq_len long
-        episodes = [episode for episode in self.data['indices'] if len(episode) > seq_len]
+        episodes = [episode for episode in self.indices if len(episode) > seq_len]
         episodes = random.sample(episodes, batch_size)
 
         # Randomly cut episodes down to seq_len and select data
@@ -309,7 +338,17 @@ class OfflineDataset (OptionsModule):
         Sample 'batch_size' single-timestep data.
         """
 
-        index = torch.randint(0, len(self.data['X']), size=(batch_size,))
-        sample = {key: self.data[key][index] for key in ['X', 'A', 'N', 'R', 'T', 'V']}
+        index = torch.randint(0, len(self.X), size=(batch_size, ))
+
+        # Reject terminal timesteps
+        terminals = (self.T[index].squeeze() | (index == len(self.X) - 1))
+        index[terminals] -= 1
+
+        sample = {key: val[index] for key, val in self.items() if val is not None}
+
+        # Get next frame
+        if 'F' in sample and self.F is not None:
+            sample['F'] = (sample['F'].to(torch.float32) / 255.0)
+            sample['FN'] = (self.F[index + 1].to(torch.float32) / 255.0)
 
         return Dot(sample)
