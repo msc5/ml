@@ -1,5 +1,6 @@
 services:
 
+    # Influxdb server
     influxdb:
         image: influxdb:latest
         container_name: influxdb
@@ -15,6 +16,7 @@ services:
             start_period: 5s
             test: "influx ping"
 
+    # Setup Influxdb
     influx-cli:
         image: influxdb:latest
         container_name: influxdb-cli
