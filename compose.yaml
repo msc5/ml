@@ -1,0 +1,37 @@
+services:
+
+    influxdb:
+        image: influxdb:latest
+        container_name: influxdb
+        restart: unless-stopped
+        networks:
+        - database
+        ports:
+          - "8086:8086"
+        volumes:
+          - ./influxdb:/var/lib/influxdb2
+        command: influxd run --reporting-disabled
+        healthcheck:
+            start_period: 5s
+            test: "influx ping"
+
+    influx-cli:
+        image: influxdb:latest
+        container_name: influxdb-cli
+        restart: on-failure:10
+        networks:
+        - database
+        depends_on:
+            influxdb:
+                condition: service_healthy
+        entrypoint: >
+            influx setup
+            --bucket metrics
+            --org ml
+            --username=username
+            --password=password
+            --host=http://influxdb:8086
+            --force
+
+networks:
+    database:
