@@ -10,11 +10,12 @@ services:
         ports:
           - "8086:8086"
         volumes:
-          - ./influxdb:/var/lib/influxdb2
+          - ./docker/influxdb:/var/lib/influxdb2
         command: influxd run --reporting-disabled
         healthcheck:
-            start_period: 5s
             test: "influx ping"
+            interval: 2s
+            retries: 5
 
     # Setup Influxdb
     influx-cli:
