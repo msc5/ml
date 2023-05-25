@@ -10,5 +10,4 @@ MUJOCO*
 *.png
 *.DS_Store
 logs/
-**/docker/
 **/influxdb/
