@@ -1,5 +1,4 @@
 
-import os
 from typing import Optional, Union
 
 from influxdb_client import InfluxDBClient, Point, WriteApi
@@ -8,10 +7,10 @@ import torch
 
 api: Optional[WriteApi] = None
 
-token = os.environ.get("INFLUXDB_TOKEN")
+token = "token"
 org = "ml"
 url = "http://localhost:8086"
-bucket = "initial_bucket"
+bucket = "metrics"
 
 
 def initialize():
@@ -21,6 +20,9 @@ def initialize():
     global api
     api = client.write_api(write_options=SYNCHRONOUS)
 
+    global session
+    from ..shared import session
+
     return api
 
 
@@ -29,30 +31,31 @@ def log(key: str, value: Union[float, torch.Tensor], tags: dict = {}, fields: di
     if isinstance(value, torch.Tensor):
         value = value.item()
 
-    from ..shared import session
+    if session.info.influxdb:
 
-    # Construct point
-    point = (
-        Point(key)
-        .tag("type", "metric")
-        .tag("run_version", session.info.version)
-        .tag("run_name", session.info.name)
-        .field("value", value)
-        .field("step", session.trainer.progress.get('session'))
-    )
+        # Construct point
+        point = (
+            Point(key)
+            .tag("type", "metric")
+            .tag("run_version", session.info.version)
+            .tag("run_name", session.info.name)
+            .field("value", value)
+            .field("step", session.trainer.progress.get('session'))
+        )
 
-    # Add additional tags
-    for key, value in tags.items():
-        point = point.tag(key, value)
+        # Add additional tags
+        for key, value in tags.items():
+            point = point.tag(key, value)
 
-    # Add additional fields
-    for key, value in fields.items():
-        point = point.field(key, value)
+        # Add additional fields
+        for key, value in fields.items():
+            point = point.field(key, value)
 
-    global api
-    if api is None:
-        api = initialize()
-    api.write(bucket=bucket, org="ml", record=point)
+        global api
+        if api is None:
+            api = initialize()
+
+        api.write(bucket=bucket, org="ml", record=point)
 
 
 def close():
@@ -60,3 +63,5 @@ def close():
     global api
     if api is not None:
         api.close()
+
+    del api

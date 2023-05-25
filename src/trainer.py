@@ -53,8 +53,6 @@ class Trainer (Module):
     results_dir: str = 'results'
     tags: list[str] = []
     group: str = 'misc'
-    slurm_id: str = ''
-    wandb_id: str = ''
     wandb_group: str = ''
     wandb_resume: bool = False
     retrain: list[str] = []
@@ -64,7 +62,6 @@ class Trainer (Module):
     metrics: Dot
     progress: Steps
     system: System
-    _selected: list = []
     _threads: dict
     _loops: list
     _gpus: list
@@ -112,12 +109,9 @@ class Trainer (Module):
         self.progress = Steps(keys=['session'])
         self.progress.add_modulo('save', every=self.save_every)
         self.system = System()
-        self.main_thread = Thread(main=True)
         self._logged = Layout()
         self.agent_table = Layout()
         self._online_results = OnlineResults()
-
-        database.initialize()
 
         section('Starting')
 
@@ -125,6 +119,8 @@ class Trainer (Module):
         from .shared import session
         self.session = session
         self.info = session.start(self)
+
+        database.initialize()
 
         # Build Trainer and models
         with Live(get_renderable=self._render_building, transient=True):
@@ -152,23 +148,21 @@ class Trainer (Module):
 
         section(f'Training Run [cyan3]{self.info.name}')
 
-        self._threads = {}
-        for name, method in getmembers(self, predicate=ismethod):
-            prefix = 'loop_'
-            if name[:len(prefix)] == prefix:
-                self._threads[name[len(prefix):]] = Thread(target=method, daemon=False)
-
-        # self._threads = {loop.__name__: Thread(target=loop, daemon=False) for loop in self.mode}
+        # session.threads = {}
+        # for name, method in getmembers(self, predicate=ismethod):
+        #     prefix = 'loop_'
+        #     if name[:len(prefix)] == prefix:
+        #         session.threads[name[len(prefix):]] = Thread(target=method, daemon=False)
 
         self.screens = Screens(self._init_screens())
 
         def block():
-            while all([thread.is_alive() for thread in self._threads.values()]):
+            while all([thread.is_alive() for thread in session.threads.values()]):
                 time.sleep(1.0)
 
         try:
-            starters = list(self._threads.values())
-            [thread.start() for thread in starters]
+            # [thread.start() for thread in session.threads.values()]
+            session.start_threads()
             if self.debug:
                 block()
             else:
@@ -200,13 +194,16 @@ class Trainer (Module):
 
         section('Exiting')
 
+        # Import session
+        from .shared import session
+
         # Save model
         self.save()
         check('Saved')
 
         # Stop threads
         self.info.exit_event.set()
-        for thread in self._threads.values():
+        for thread in session.threads.values():
             if thread.is_alive():
                 thread.join()
         check('Threads stopped')
@@ -303,11 +300,14 @@ class Trainer (Module):
             commit = Text('Commit: ') + Text('\"' + self.info.github.commit + '\"', style='green')
             table.add_row('Github', branch, commit)
 
+            # Influxdb
+            table.add_row('Influxdb', '', Alive(self.info.influxdb))
+
             # Wandb and Slurm
             wandb_id = Text(self.info.wandb.id, style='magenta') if self.info.wandb is not None else empty
-            slurm_id = Text(self.slurm_id, style='magenta') if self.slurm_id != '' else empty
+            slurm_id = Text(self.info.slurm_id, style='magenta') if self.info.slurm_id != '' else empty
             table.add_row('Wandb', Text('ID: ') + wandb_id, Alive(self.info.wandb is not None))
-            table.add_row('Slurm', Text('ID: ') + slurm_id, Alive(self.slurm_id != ''))
+            table.add_row('Slurm', Text('ID: ') + slurm_id, Alive(self.info.slurm_id != ''))
 
             yield Panel(table, border_style='black')
 
@@ -336,7 +336,7 @@ class Trainer (Module):
 
         @rgroup()
         def progress():
-            yield dot('Threads', self.main_thread)
+            yield dot('Threads', self.session.main_thread)
             yield dot('Progress', self.progress)
             yield dot('System', self.system)
 

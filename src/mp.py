@@ -228,11 +228,11 @@ class Process:
     queues: dict[str, ManagedQueue]
 
     def __init__(self,
-                 args,
+                 args: list = [],
                  target: Callable | None = None,
                  name: str | None = None,
                  queue: Queue | None = None,
-                 hidden: bool = False, 
+                 hidden: bool = False,
                  hide_queue: bool = False,
                  *arguments, **kwargs):
 

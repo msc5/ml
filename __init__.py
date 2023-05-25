@@ -22,8 +22,8 @@ from .src.agent import *
 from .src.helpers import *
 from .src.shape import *
 
+# Shared
+from .src.shared import session
+
 # Renderables
 from .src.renderables import *
-
-# Server
-from .src import server

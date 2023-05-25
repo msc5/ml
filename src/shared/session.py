@@ -2,22 +2,32 @@
 This module stores variables that are relevant for a single training session.
 """
 
+from collections import defaultdict
 import git
 import os
 import wandb
+import socket
 
 from ..dot import Dot
 from ..io import generate_name
 from ..trainer import Trainer
 from ..util import Metadata
 from ..renderables import check
-from ..mp import Manager
+from ..mp import Manager, Thread
 from ..cli import console
 
+# -------------------- Global Variables -------------------- #
+
 trainer: Trainer
+manager: Manager
+
+main_thread: Thread = Thread(main=True)
+modes: defaultdict = defaultdict(dict)
+
+threads: dict
 info: Dot
 
-manager: Manager
+# -------------------- Functions -------------------- #
 
 
 def start(trainer: Trainer):
@@ -50,8 +60,13 @@ def start(trainer: Trainer):
     # Get slurm job name
     name = os.environ.get('SLURM_JOB_NAME')
     id = os.environ.get('SLURM_JOB_ID')
-    if name is not None and id is not None:
-        info.slurm_id = f'{name}-{id}'
+    info.slurm_id = f'{name}-{id}' if name is not None and id is not None else ''
+
+    # Check for influxdb instance
+    def is_port_in_use(port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(('localhost', port)) == 0
+    info.influxdb = is_port_in_use(8086)
 
     # Initialize run name and directory
     info.name = trainer.group if trainer.group != "misc" else generate_name()
@@ -65,13 +80,33 @@ def start(trainer: Trainer):
         info.wandb = wandb.init(project=trainer.opts.sys.module, name=info.name,
                                 group=trainer.wandb_group,
                                 tags=[*trainer.tags, trainer.group],
-                                config={k: v.value for k, v in trainer._gather_params()},
-                                id=trainer.wandb_id if trainer.wandb_resume else None)
-        console.print()
-        if trainer.wandb_resume:
-            check(f'Resumed wandb run [cyan]{trainer.wandb_id}[reset]', color='green')
-        else:
-            check('Initialized Wandb', color='green')
+                                config={k: v.value for k, v in trainer._gather_params()})
+        check('Initialized Wandb', color='green')
     check('Not Using Wandb', color='green')
 
     return info
+
+
+def thread(mode: str = ''):
+
+    def wrapped(function):
+
+        # Add to modes map
+        global modes
+        modes[mode][function.__name__] = function
+
+    return wrapped
+
+
+def start_threads():
+
+    global threads
+    global modes
+    global trainer
+
+    threads = {}
+    for name, function in modes[trainer.mode].items():
+        threads[name] = Thread(target=function, args=[trainer], daemon=False)
+
+    for thread in threads.values():
+        thread.start()
