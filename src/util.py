@@ -1,5 +1,6 @@
 from __future__ import annotations
 import contextlib as cl
+import ctypes
 from dataclasses import dataclass
 import json
 import linecache
@@ -11,8 +12,6 @@ import threading
 import time
 import tracemalloc
 from typing import Any, Callable, Iterable, Optional, Union
-
-import ctypes
 
 import GPUtil
 import psutil
@@ -27,12 +26,11 @@ import torch
 import torch.nn as nn
 from torchviz import make_dot
 
+from . import logger
 from .cli import console
-
+from .func import ema
 from .module import Module
 from .renderables import Table
-
-from .func import ema
 
 
 def viz(module: Module, tensor: torch.Tensor, path: str = 'viz'):
@@ -107,6 +105,14 @@ class Ranges:
         self._max = x.max().item()
         self._mean = x.mean().item() if x.is_floating_point() else None
         self._std = x.std().item() if x.is_floating_point() else None
+
+    def log(self, key: str):
+        logger.log(f'{key}.min', self._min)
+        logger.log(f'{key}.max', self._max)
+        if self._mean is not None:
+            logger.log(f'{key}.mean', self._mean)
+        if self._std is not None:
+            logger.log(f'{key}.std', self._std)
 
     def __rich__(self):
         msg = Text.from_markup(f'[[green]{self._min:.2f}[/green], [green]{self._max:.2f}[/green]]')

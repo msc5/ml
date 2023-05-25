@@ -29,7 +29,7 @@ from .dot import Dot
 from .renderables import Alive, Table, check, section
 from .util import Keyboard, Metadata, Ranges, Screens, Steps, System, Timer
 from .shared import OnlineResults
-from .client import database
+from . import logger
 
 
 os.environ["WANDB_CONSOLE"] = "off"
@@ -120,7 +120,7 @@ class Trainer (Module):
         self.session = session
         self.info = session.start(self)
 
-        database.initialize()
+        logger.initialize()
 
         # Build Trainer and models
         with Live(get_renderable=self._render_building, transient=True):
@@ -208,7 +208,7 @@ class Trainer (Module):
                 thread.join()
         check('Threads stopped')
 
-        database.close()
+        logger.close()
 
         # Finish Wandb
         if self.info.wandb is not None:
@@ -246,9 +246,14 @@ class Trainer (Module):
         # Log to database
         for key, val in self.model.metrics:
             if isinstance(val, float) or isinstance(val, int):
-                database.log(key, val)
+                logger.log(key, val)
+
+        for key, val in self.model.ranges:
+            if isinstance(val, Ranges):
+                val.log(key)
 
     def log_metrics(self):
+
         if self.log:
             log = {}
             for model in self._selected:
