@@ -8,7 +8,7 @@ from influxdb_client import InfluxDBClient, Point, WriteApi
 from influxdb_client.client.write_api import SYNCHRONOUS
 import torch
 
-FLUSH_INTERVAL: int = 1000
+FLUSH_INTERVAL: int = 100
 
 api: Optional[WriteApi] = None
 points: list[Point] = []
