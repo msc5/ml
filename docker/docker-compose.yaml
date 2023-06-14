@@ -38,6 +38,10 @@ services:
     #         --token=token
     #         --host=http://influxdb:8086
     #         --force
+    #
+
+    # nginx:
+    #     whater
 
 networks:
     database:

@@ -52,7 +52,6 @@ def log(key: str, value: Union[float, torch.Tensor], tags: dict = {}, fields: di
         # Construct point
         point = (
             Point(key)
-            .tag("type", "metric")
             .tag("run_version", session.info.version)
             .tag("run_name", session.info.name)
             .field("value", value)
