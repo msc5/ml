@@ -2,17 +2,17 @@ name: ml
 
 services:
 
-    # Influxdb server
-    influxdb:
-        build: ./influx
-        container_name: influxdb
-        restart: unless-stopped
-        networks:
-            - database
-        ports:
-            - "8086:8086"
-        volumes:
-            - ./influx/database:/var/lib/influxdb2
+    # # Influxdb server
+    # influxdb:
+    #     build: ./influx
+    #     container_name: influxdb
+    #     restart: unless-stopped
+    #     networks:
+    #         - database
+    #     ports:
+    #         - "8086:8086"
+    #     volumes:
+    #         - ./influx/database:/var/lib/influxdb2
 
     # MySQL
     mysql:
@@ -20,13 +20,15 @@ services:
         container_name: mysql
         restart: unless-stopped
         environment:
-            MYSQL_ROOT_PASSWORD: 'password'
+            MYSQL_ROOT_PASSWORD: "password"
+            MYSQL_DATABASE: "metrics"
         networks:
             - database
         ports:
             - "3307:3306"
         volumes:
             - ./mysql/database:/var/lib/mysql
+
 
 networks:
     database:

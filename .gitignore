@@ -11,5 +11,6 @@ MUJOCO*
 *.DS_Store
 logs/
 
+# Databses
 **/influx/database/
 **/mysql/database/
