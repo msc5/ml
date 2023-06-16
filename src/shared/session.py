@@ -7,6 +7,7 @@ import git
 import os
 import wandb
 import socket
+import time
 
 from ..dot import Dot
 from ..io import generate_name
@@ -38,6 +39,7 @@ def start(trainer: Trainer):
     # Initialize session info
     global info
     info = Dot()
+    info.start_time = time.time()
 
     # Initialize manager for multiprocessing
     global manager

@@ -10,4 +10,6 @@ MUJOCO*
 *.png
 *.DS_Store
 logs/
-**/influxdb/
+
+**/influx/database/
+**/mysql/database/

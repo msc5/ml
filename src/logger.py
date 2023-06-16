@@ -8,6 +8,8 @@ from influxdb_client import InfluxDBClient, Point, WriteApi
 from influxdb_client.client.write_api import SYNCHRONOUS
 import torch
 
+from .dot.dot import Dot
+
 FLUSH_INTERVAL: int = 100
 
 api: Optional[WriteApi] = None
@@ -37,6 +39,22 @@ def initialize():
     return api
 
 
+def flush(point):
+
+    global points
+
+    # Flush if list is full
+    if len(points) >= FLUSH_INTERVAL:
+
+        global api
+        if api is None:
+            api = initialize()
+
+        api.write(bucket=bucket, org="ml", record=point)
+
+        points = []
+
+
 def log(key: str, value: Union[float, torch.Tensor], tags: dict = {}, fields: dict = {}):
     """
     Log a data point to Influxdb.
@@ -51,11 +69,11 @@ def log(key: str, value: Union[float, torch.Tensor], tags: dict = {}, fields: di
 
         # Construct point
         point = (
-            Point(key)
+            Point('metrics')
             .tag("run_version", session.info.version)
             .tag("run_name", session.info.name)
-            .field("value", value)
             .field("step", session.trainer.progress.get('session'))
+            .field(key, value)
         )
 
         # Add additional tags
@@ -68,16 +86,32 @@ def log(key: str, value: Union[float, torch.Tensor], tags: dict = {}, fields: di
 
         points.append(point)
 
-        # Flush if list is full
-        if len(points) >= FLUSH_INTERVAL:
+        flush(point)
 
-            global api
-            if api is None:
-                api = initialize()
 
-            api.write(bucket=bucket, org="ml", record=point)
+def log_metrics(metrics: Dot):
 
-            points = []
+    if session.info.influxdb:
+
+        # Construct point
+        point = (
+            Point('metrics')
+            .tag("run_version", session.info.version)
+            .tag("run_name", session.info.name)
+            .tag("run_start_time", session.info.start_time)
+            .field("step", session.trainer.progress.get('session'))
+        )
+
+        # Add fields
+        for key, value in metrics:
+            if isinstance(value, float) or isinstance(value, int):
+                point = point.field(key, value)
+            elif isinstance(value, torch.Tensor):
+                point = point.field(key, value.item())
+
+        points.append(point)
+
+        flush(point)
 
 
 def close():

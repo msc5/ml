@@ -243,14 +243,15 @@ class Trainer (Module):
 
     def log_metrics_database(self):
 
-        # Log to database
-        for key, val in self.model.metrics:
-            if isinstance(val, float) or isinstance(val, int):
-                logger.log(key, val)
+        # # Log to database
+        # for key, val in self.model.metrics:
+        #     if isinstance(val, float) or isinstance(val, int):
+        #         logger.log(key, val)
+        logger.log_metrics(self.model.metrics)
 
-        for key, val in self.model.ranges:
-            if isinstance(val, Ranges):
-                val.log(key)
+        # for key, val in self.model.ranges:
+        #     if isinstance(val, Ranges):
+        #         val.log(key)
 
     def log_metrics(self):
 
