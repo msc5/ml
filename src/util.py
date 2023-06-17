@@ -26,7 +26,7 @@ import torch
 import torch.nn as nn
 from torchviz import make_dot
 
-from . import logger
+from .database import influxdb
 from .cli import console
 from .func import ema
 from .module import Module
@@ -107,12 +107,12 @@ class Ranges:
         self._std = x.std().item() if x.is_floating_point() else None
 
     def log(self, key: str):
-        logger.log(f'{key}.min', self._min)
-        logger.log(f'{key}.max', self._max)
+        influxdb.log(f'{key}.min', self._min)
+        influxdb.log(f'{key}.max', self._max)
         if self._mean is not None:
-            logger.log(f'{key}.mean', self._mean)
+            influxdb.log(f'{key}.mean', self._mean)
         if self._std is not None:
-            logger.log(f'{key}.std', self._std)
+            influxdb.log(f'{key}.std', self._std)
 
     def __rich__(self):
         msg = Text.from_markup(f'[[green]{self._min:.2f}[/green], [green]{self._max:.2f}[/green]]')

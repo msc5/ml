@@ -8,7 +8,7 @@ from influxdb_client import InfluxDBClient, Point, WriteApi
 from influxdb_client.client.write_api import SYNCHRONOUS
 import torch
 
-from .dot.dot import Dot
+from ..dot import Dot
 
 FLUSH_INTERVAL: int = 100
 
@@ -34,7 +34,7 @@ def initialize():
     api = client.write_api(write_options=SYNCHRONOUS)
 
     global session
-    from .shared import session
+    from ..shared import session
 
     return api
 

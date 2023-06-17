@@ -29,7 +29,7 @@ from .dot import Dot
 from .renderables import Alive, Table, check, section
 from .util import Keyboard, Metadata, Ranges, Screens, Steps, System, Timer
 from .shared import OnlineResults
-from . import logger
+from .database import influxdb
 
 
 os.environ["WANDB_CONSOLE"] = "off"
@@ -120,7 +120,7 @@ class Trainer (Module):
         self.session = session
         self.info = session.start(self)
 
-        logger.initialize()
+        influxdb.initialize()
 
         # Build Trainer and models
         with Live(get_renderable=self._render_building, transient=True):
@@ -208,7 +208,7 @@ class Trainer (Module):
                 thread.join()
         check('Threads stopped')
 
-        logger.close()
+        influxdb.close()
 
         # Finish Wandb
         if self.info.wandb is not None:
@@ -242,16 +242,7 @@ class Trainer (Module):
         self.progress.step('session')
 
     def log_metrics_database(self):
-
-        # # Log to database
-        # for key, val in self.model.metrics:
-        #     if isinstance(val, float) or isinstance(val, int):
-        #         logger.log(key, val)
-        logger.log_metrics(self.model.metrics)
-
-        # for key, val in self.model.ranges:
-        #     if isinstance(val, Ranges):
-        #         val.log(key)
+        influxdb.log_metrics(self.model.metrics)
 
     def log_metrics(self):
 
@@ -308,6 +299,7 @@ class Trainer (Module):
 
             # Influxdb
             table.add_row('Influxdb', '', Alive(self.info.influxdb))
+            table.add_row('MySQL', '', Alive(self.info.mysql))
 
             # Wandb and Slurm
             wandb_id = Text(self.info.wandb.id, style='magenta') if self.info.wandb is not None else empty

@@ -3,6 +3,7 @@ This module stores variables that are relevant for a single training session.
 """
 
 from collections import defaultdict
+import random
 import git
 import os
 import wandb
@@ -16,6 +17,7 @@ from ..util import Metadata
 from ..renderables import check
 from ..mp import Manager, Thread
 from ..cli import console
+from ..database import mysql
 
 # -------------------- Global Variables -------------------- #
 
@@ -64,13 +66,15 @@ def start(trainer: Trainer):
     id = os.environ.get('SLURM_JOB_ID')
     info.slurm_id = f'{name}-{id}' if name is not None and id is not None else ''
 
-    # Check for influxdb instance
+    # Check for database instances
     def is_port_in_use(port: int) -> bool:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex(('localhost', port)) == 0
     info.influxdb = is_port_in_use(8086)
+    info.mysql = is_port_in_use(3307)
 
     # Initialize run name and directory
+    info.id = random.getrandbits(128)
     info.name = trainer.group if trainer.group != "misc" else generate_name()
     info.dir = os.path.join(trainer.results_dir, trainer.opts.sys.module, info.name)
     check(f'Created Directory [cyan]{info.dir}[reset]', color='green')
@@ -85,6 +89,10 @@ def start(trainer: Trainer):
                                 config={k: v.value for k, v in trainer._gather_params()})
         check('Initialized Wandb', color='green')
     check('Not Using Wandb', color='green')
+
+    # Push "info" to metadata database (mysql)
+    mysql.initialize()
+    mysql.log_run(info)
 
     return info
 
