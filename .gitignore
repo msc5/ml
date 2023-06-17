@@ -14,3 +14,7 @@ logs/
 # Databses
 **/influx/database/
 **/mysql/database/
+**/mysql/socket/
+
+**/node_modules/
+package-lock.json

@@ -13,6 +13,11 @@ services:
             - "8086:8086"
         volumes:
             - ./influx/database:/var/lib/influxdb2
+        healthcheck:
+            test: ["CMD", "influx", "ping"]
+            interval: 5s
+            timeout: 30s
+            retries: 10
 
     # MySQL
     mysql:
@@ -23,7 +28,6 @@ services:
             MYSQL_ROOT_PASSWORD: password
             MYSQL_USER: username
             MYSQL_PASSWORD: password
-            MYSQL_TCP_PORT: 3306
         networks:
             - database
         ports:
@@ -32,6 +36,11 @@ services:
             - 3307
         volumes:
             - ./mysql/database:/var/lib/mysql
+        healthcheck:
+            test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost", "-p$$MYSQL_ROOT_PASSWORD"]
+            interval: 5s
+            timeout: 30s
+            retries: 10
 
     # phpMyAdmin
     phpmyadmin:
@@ -44,6 +53,23 @@ services:
             - 8080:80
         links:
             - mysql:db
+
+    # Socket
+    socket:
+        build: ./socket
+        container_name: socket
+        restart: unless-stopped
+        depends_on:
+            mysql:
+                condition: service_healthy
+            influxdb:
+                condition: service_healthy
+        networks:
+            - database
+        ports:
+            - 3300:3300
+        expose:
+            - 3300
 
 networks:
     database:
