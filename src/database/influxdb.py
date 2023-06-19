@@ -55,40 +55,6 @@ def flush(point):
         points = []
 
 
-def log(key: str, value: Union[float, torch.Tensor], tags: dict = {}, fields: dict = {}):
-    """
-    Log a data point to Influxdb.
-    """
-
-    global points
-
-    if isinstance(value, torch.Tensor):
-        value = value.item()
-
-    if session.info.influxdb:
-
-        # Construct point
-        point = (
-            Point('metrics')
-            .tag("run_version", session.info.version)
-            .tag("run_name", session.info.name)
-            .field("step", session.trainer.progress.get('session'))
-            .field(key, value)
-        )
-
-        # Add additional tags
-        for key, value in tags.items():
-            point = point.tag(key, value)
-
-        # Add additional fields
-        for key, value in fields.items():
-            point = point.field(key, value)
-
-        points.append(point)
-
-        flush(point)
-
-
 def log_metrics(metrics: Dot):
 
     if session.info.influxdb:
@@ -96,8 +62,9 @@ def log_metrics(metrics: Dot):
         # Construct point
         point = (
             Point('metrics')
-            .tag("run_version", session.info.version)
+            .tag("run_id", session.info.id)
             .tag("run_name", session.info.name)
+            .tag("run_version", session.info.version)
             .tag("run_start_time", session.info.start_time)
             .field("step", session.trainer.progress.get('session'))
         )
