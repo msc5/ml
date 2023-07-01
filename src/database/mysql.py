@@ -73,5 +73,29 @@ def log_run(info: Dot):
         connection.commit()
 
 
+def log_metric(metric: Dot):
+
+    from ..shared import session
+    if session.info.mysql:
+
+        global engine
+        global connection
+        if connection is None or engine is None:
+            engine, connection = initialize()
+
+        meta = db.MetaData()
+        db.MetaData.reflect(meta, bind=engine)
+
+        breakpoint()
+
+        table = meta.tables["metrics"]
+
+        statement = (db.insert(table)
+                     .values(name=metric.name))
+
+        connection.execute(statement)
+        connection.commit()
+
+
 if __name__ == "__main__":
     initialize()

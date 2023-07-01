@@ -7,6 +7,7 @@ from typing import Optional
 from influxdb_client import InfluxDBClient, Point, WriteApi, WriteOptions
 import torch
 
+from . import mysql
 from ..dot import Dot
 
 FLUSH_INTERVAL: int = 100
@@ -54,6 +55,9 @@ def log_metrics(metrics: Dot):
 
         # Add fields
         for key, value in metrics:
+
+            mysql.log_metric(Dot(name=key))
+
             if isinstance(value, float) or isinstance(value, int):
                 point = point.field(key, value)
             elif isinstance(value, torch.Tensor):
