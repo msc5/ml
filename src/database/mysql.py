@@ -8,7 +8,7 @@ import sqlalchemy as db
 from ..dot import Dot
 from ..cli import console
 
-# specify database configurations
+# Specify database configuration
 config = {
     'host': 'localhost',
     'port': 3307,
@@ -61,13 +61,13 @@ def log_run(info: Dot):
         meta = db.MetaData()
         db.MetaData.reflect(meta, bind=engine)
 
-        Runs = meta.tables["Runs"]
+        table = meta.tables["runs"]
 
-        statement = (db.insert(Runs)
-                     .values(Id=info.id,
-                             Name=info.name,
-                             Version=0,
-                             StartTime=info.start_time))
+        statement = (db.insert(table)
+                     .values(id=info.id,
+                             name=info.name,
+                             version=0,
+                             start_time=info.start_time))
 
         connection.execute(statement)
         connection.commit()

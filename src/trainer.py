@@ -233,16 +233,13 @@ class Trainer (Module):
     def train_step_complete(self):
 
         # self.log_metrics()
-        self.log_metrics_database()
+        influxdb.log_metrics(self.model.metrics)
 
         if self.progress.modulo('session', 'save'):
             self.save()
 
         self.progress.step('train')
         self.progress.step('session')
-
-    def log_metrics_database(self):
-        influxdb.log_metrics(self.model.metrics)
 
     def log_metrics(self):
 

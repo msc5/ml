@@ -2,10 +2,9 @@
 Logs data to Influxdb.
 """
 
-from typing import Optional, Union
+from typing import Optional
 
-from influxdb_client import InfluxDBClient, Point, WriteApi
-from influxdb_client.client.write_api import SYNCHRONOUS
+from influxdb_client import InfluxDBClient, Point, WriteApi, WriteOptions
 import torch
 
 from ..dot import Dot
@@ -31,28 +30,12 @@ def initialize():
     client = InfluxDBClient(url=url, token=token, org=org)
 
     global api
-    api = client.write_api(write_options=SYNCHRONOUS)
+    api = client.write_api(write_options=WriteOptions(flush_interval=FLUSH_INTERVAL))
 
     global session
     from ..shared import session
 
     return api
-
-
-def flush(point):
-
-    global points
-
-    # Flush if list is full
-    if len(points) >= FLUSH_INTERVAL:
-
-        global api
-        if api is None:
-            api = initialize()
-
-        api.write(bucket=bucket, org="ml", record=point)
-
-        points = []
 
 
 def log_metrics(metrics: Dot):
@@ -76,9 +59,11 @@ def log_metrics(metrics: Dot):
             elif isinstance(value, torch.Tensor):
                 point = point.field(key, value.item())
 
-        points.append(point)
+        global api
+        if api is None:
+            api = initialize()
 
-        flush(point)
+        api.write(bucket=bucket, org="ml", record=point)
 
 
 def close():
