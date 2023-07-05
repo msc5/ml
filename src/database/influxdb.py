@@ -56,8 +56,6 @@ def log_metrics(metrics: Dot):
         # Add fields
         for key, value in metrics:
 
-            mysql.log_metric(Dot(name=key))
-
             if isinstance(value, float) or isinstance(value, int):
                 point = point.field(key, value)
             elif isinstance(value, torch.Tensor):

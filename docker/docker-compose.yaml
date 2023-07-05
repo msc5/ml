@@ -2,7 +2,7 @@ name: ml
 
 services:
 
-    # Influxdb server
+    # Influxdb (Backend + Frontend)
     influxdb:
         build: ./influx
         container_name: influxdb
@@ -19,40 +19,34 @@ services:
             timeout: 30s
             retries: 10
 
-    # MySQL
-    mysql:
-        build: ./mysql
-        container_name: mysql
+    # Mongo (Backend)
+    mongo:
+        image: mongo
+        container_name: mongo
         restart: unless-stopped
-        environment:
-            MYSQL_ROOT_PASSWORD: password
-            MYSQL_USER: username
-            MYSQL_PASSWORD: password
         networks:
             - database
         ports:
-            - 3307:3306
-        expose:
-            - 3307
+            - 27017:27017
         volumes:
-            - ./mysql/database:/var/lib/mysql
-        healthcheck:
-            test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost", "-p$$MYSQL_ROOT_PASSWORD"]
-            interval: 5s
-            timeout: 30s
-            retries: 10
+            - ./mongo/database:/data/db
+        environment:
+            MONGO_INITDB_ROOT_USERNAME: username
+            MONGO_INITDB_ROOT_PASSWORD: password
 
-    # phpMyAdmin
-    phpmyadmin:
-        image: phpmyadmin
-        container_name: phpmyadmin
-        restart: unless-stopped
+    # Mongo (Frontend)
+    mongo-express:
+        image: mongo-express
+        container_name: mongo-express
+        restart: always
         networks:
             - database
         ports:
-            - 8080:80
-        links:
-            - mysql:db
+            - 8081:8081
+        environment:
+            ME_CONFIG_MONGODB_ADMINUSERNAME: username
+            ME_CONFIG_MONGODB_ADMINPASSWORD: password
+            ME_CONFIG_MONGODB_URL: mongodb://username:password@mongo:27017/
 
     # Socket
     socket:
@@ -60,8 +54,6 @@ services:
         container_name: socket
         restart: unless-stopped
         depends_on:
-            mysql:
-                condition: service_healthy
             influxdb:
                 condition: service_healthy
         networks:

@@ -14,6 +14,7 @@ logs/
 # Databses
 **/influx/database/
 **/mysql/database/
+**/mongo/database/
 **/mysql/socket/
 
 **/node_modules/

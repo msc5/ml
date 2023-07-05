@@ -2,13 +2,10 @@ import abc
 from functools import partial
 from numbers import Number
 import os
-import re
 import subprocess
 import threading
 import time
 from typing import Any, Optional
-from inspect import getmembers, ismethod
-
 
 from humanize import naturalsize
 from rich import box
@@ -22,14 +19,13 @@ import torch
 import wandb
 
 from .cli import console
-from .module import Module
-from .mp import Thread
-from .options import Options
+from .database import influxdb, mongo
 from .dot import Dot
+from .module import Module
+from .options import Options
 from .renderables import Alive, Table, check, section
-from .util import Keyboard, Metadata, Ranges, Screens, Steps, System, Timer
 from .shared import OnlineResults
-from .database import influxdb
+from .util import Keyboard, Metadata, Ranges, Screens, Steps, System, Timer
 
 
 os.environ["WANDB_CONSOLE"] = "off"
@@ -232,7 +228,7 @@ class Trainer (Module):
 
     def train_step_complete(self):
 
-        # self.log_metrics()
+        mongo.log_metrics(self.model.metrics)
         influxdb.log_metrics(self.model.metrics)
 
         if self.progress.modulo('session', 'save'):
@@ -296,7 +292,8 @@ class Trainer (Module):
 
             # Influxdb
             table.add_row('Influxdb', '', Alive(self.info.influxdb))
-            table.add_row('MySQL', '', Alive(self.info.mysql))
+            # table.add_row('MySQL', '', Alive(self.info.mysql))
+            table.add_row('MongoDB', '', Alive(self.info.mongodb))
 
             # Wandb and Slurm
             wandb_id = Text(self.info.wandb.id, style='magenta') if self.info.wandb is not None else empty

@@ -17,7 +17,7 @@ from ..util import Metadata
 from ..renderables import check
 from ..mp import Manager, Thread
 from ..cli import console
-from ..database import mysql
+from ..database import mysql, mongo
 
 # -------------------- Global Variables -------------------- #
 
@@ -72,9 +72,10 @@ def start(trainer: Trainer):
             return s.connect_ex(('localhost', port)) == 0
     info.influxdb = is_port_in_use(8086)
     info.mysql = is_port_in_use(3307)
+    info.mongodb = is_port_in_use(27017)
 
     # Initialize run name and directory
-    info.id = random.getrandbits(128)
+    # info.id = random.getrandbits(32)
     info.name = trainer.group if trainer.group != "misc" else generate_name()
     info.dir = os.path.join(trainer.results_dir, trainer.opts.sys.module, info.name)
     check(f'Created Directory [cyan]{info.dir}[reset]', color='green')
@@ -90,9 +91,9 @@ def start(trainer: Trainer):
         check('Initialized Wandb', color='green')
     check('Not Using Wandb', color='green')
 
-    # Push "info" to metadata database (mysql)
-    mysql.initialize()
-    mysql.log_run(info)
+    # Push "info" to metadata database (mongo)
+    mongo.initialize()
+    info.id = mongo.log_run(info)
 
     return info
 
