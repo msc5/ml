@@ -2,8 +2,8 @@ import { InfluxDB } from '@influxdata/influxdb-client'
 
 const org = 'ml'
 const token = 'token'
-// const url = 'http://influxdb:8086'
-const url = 'http://localhost:8086'
+const url = 'http://influxdb:8086'
+// const url = 'http://localhost:8086'
 
 const db = new InfluxDB({ url, token }).getQueryApi(org)
 

@@ -48,20 +48,36 @@ services:
             ME_CONFIG_MONGODB_ADMINPASSWORD: password
             ME_CONFIG_MONGODB_URL: mongodb://username:password@mongo:27017/
 
-    # Socket
-    socket:
-        build: ./socket
-        container_name: socket
-        restart: unless-stopped
-        depends_on:
-            influxdb:
-                condition: service_healthy
-        networks:
-            - database
-        ports:
-            - 3300:3300
-        expose:
-            - 3300
+    # # Socket
+    # socket:
+    #     build: ./socket
+    #     container_name: socket
+    #     restart: unless-stopped
+    #     depends_on:
+    #         influxdb:
+    #             condition: service_healthy
+    #     networks:
+    #         - database
+    #     ports:
+    #         - 3300:3300
+    #     expose:
+    #         - 3300
+    #     volumes:
+    #         - ./socket/dev:/app
+    #
+    # # Site
+    # site:
+    #     build: ./site
+    #     container_name: site
+    #     restart: unless-stopped
+    #     networks:
+    #         - database
+    #     ports:
+    #         - 3000:3000
+    #     expose:
+    #         - 3000
+    #     volumes:
+    #         - ./site/dev:/app/dev
 
 networks:
     database:
