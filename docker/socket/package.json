@@ -5,6 +5,7 @@
   "description": "",
   "main": "src/server.js",
   "scripts": {
+	"dev": "nodemon src/server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Matthew Coleman",
@@ -14,6 +15,6 @@
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "mongodb": "^5.6.0",
-    "mysql2": "^3.3.5"
+	"nodemon": "^3.0.0"
   }
 }
